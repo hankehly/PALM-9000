@@ -11,6 +11,13 @@ dependencies = [
     "langchain>=0.3.26",
     "langchain-huggingface>=0.3.0",
     "langgraph>=0.5.0",
+    "openai-whisper>=20250625",
+    "pvporcupine>=3.0.5",
+    "pvrecorder>=1.2.7",
+    "pyttsx3>=2.98",
+    "scipy>=1.16.0",
+    "sounddevice>=0.5.2",
     "torch>=2.7.1",
     "transformers>=4.53.0",
+    "webrtcvad>=2.0.10",
 ]
