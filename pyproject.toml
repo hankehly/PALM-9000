@@ -14,6 +14,7 @@ dependencies = [
     "openai-whisper>=20250625",
     "pvporcupine>=3.0.5",
     "pvrecorder>=1.2.7",
+    "pydantic>=2.11.7",
     "pyttsx3>=2.98",
     "scipy>=1.16.0",
     "sounddevice>=0.5.2",
