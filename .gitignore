@@ -4,3 +4,5 @@
 *.ppn
 *.pv
 *.zip
+models/*
+!models/.gitkeep
