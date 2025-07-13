@@ -4,6 +4,9 @@ from google.genai import types
 from palm_9000.settings import settings
 
 
+TTS_SAMPLE_RATE = 24000
+
+
 def text_to_speech(text: str) -> bytes:
     """
     Generates speech from text using Google Gemini TTS.
@@ -14,6 +17,8 @@ def text_to_speech(text: str) -> bytes:
 
     Test it here:
     https://aistudio.google.com/generate-speech
+
+    The output uses a sample rate of 24kHz.
     """
     client = genai.Client(api_key=settings.google_api_key.get_secret_value())
     prompt = f"Say quickly with an eerie calm: {text}"

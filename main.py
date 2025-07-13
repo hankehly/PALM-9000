@@ -7,7 +7,7 @@ import webrtcvad
 from palm_9000.llm import run_llm
 from palm_9000.settings import settings
 from palm_9000.speech_to_text import speech_to_text, STT_SAMPLE_RATE
-from palm_9000.text_to_speech import text_to_speech
+from palm_9000.text_to_speech import text_to_speech, TTS_SAMPLE_RATE
 from palm_9000.utils import play_audio, wait_until_device_available
 from palm_9000.wake_word import wait_for_wake_word
 from palm_9000.vad import (
@@ -94,7 +94,6 @@ def main():
         # Export to wav file for debugging
         scipy.io.wavfile.write(
             f"output_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.wav",
-            # settings.sample_rate,
             STT_SAMPLE_RATE,
             np.frombuffer(voiced_frame_bytes_stt_sr, dtype=np.int16),
         )
@@ -123,7 +122,7 @@ def main():
         text_to_speech_result = text_to_speech(llm_response)
 
         print("🌴 Playing audio response...")
-        play_audio(text_to_speech_result)
+        play_audio(text_to_speech_result, sample_rate=TTS_SAMPLE_RATE, volume=1.0)
 
 
 if __name__ == "__main__":
