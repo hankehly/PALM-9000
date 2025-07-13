@@ -6,3 +6,4 @@
 *.zip
 models/*
 !models/.gitkeep
+__pycache__

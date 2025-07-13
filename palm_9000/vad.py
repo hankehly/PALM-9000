@@ -5,7 +5,8 @@ from collections.abc import Iterable
 import numpy as np
 import sounddevice as sd
 import webrtcvad
-from scipy.signal import resample_poly
+
+from palm_9000.utils import resample
 
 
 class Frame:
@@ -52,21 +53,6 @@ def microphone_audio_frame_generator(
             audio = stream.read(frame_size)[0]
             yield Frame(audio.tobytes(), timestamp, duration)
             timestamp += duration
-
-
-def resample(
-    audio: np.ndarray, original_sample_rate: int, target_sample_rate: int
-) -> np.ndarray:
-    """
-    This is the equivalent of calling:
-    resample_poly(audio, target_sample_rate, original_sample_rate)
-
-    But the program will use less compute resources if we reduce the
-    ratio 44100:16000 to 441:160 with np.gcd (Greatest Common Divisor)
-    which finds the largest integer that evenly divides two numbers.
-    """
-    gcd = np.gcd(original_sample_rate, target_sample_rate)
-    return resample_poly(audio, target_sample_rate // gcd, original_sample_rate // gcd)
 
 
 def resample_frames(
