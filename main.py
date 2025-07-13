@@ -78,11 +78,11 @@ def main():
         )
 
         # Export to wav file for debugging
-        scipy.io.wavfile.write(
-            f"output_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.wav",
-            STT_SAMPLE_RATE,
-            np.frombuffer(voiced_frame_bytes_stt_sr, dtype=np.int16),
-        )
+        # scipy.io.wavfile.write(
+        #     f"output_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.wav",
+        #     STT_SAMPLE_RATE,
+        #     np.frombuffer(voiced_frame_bytes_stt_sr, dtype=np.int16),
+        # )
 
         print("🌴 Processing audio chunks for speech-to-text...")
         speech_to_text_result = speech_to_text(voiced_frame_bytes_stt_sr)
@@ -108,7 +108,7 @@ def main():
         text_to_speech_result = text_to_speech(llm_response)
 
         print("🌴 Playing audio response...")
-        play_audio(text_to_speech_result, sample_rate=TTS_SAMPLE_RATE, volume=1.0)
+        play_audio(text_to_speech_result, sample_rate=TTS_SAMPLE_RATE, volume=2.0)
 
 
 if __name__ == "__main__":

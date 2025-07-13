@@ -7,12 +7,14 @@ from palm_9000.settings import settings
 
 def wait_for_wake_word():
     """
-    Waits for the wake word "computer" using Porcupine and sounddevice.
+    Waits for the wake word using Porcupine and sounddevice.
     This function blocks until the wake word is detected.
     """
     porcupine = pvporcupine.create(
         access_key=settings.picovoice_access_key.get_secret_value(),
         keywords=[settings.porcupine_keyword],
+        # keyword_paths=[settings.porcupine_keyword_path],
+        # model_path=settings.porcupine_model_path,
     )
 
     try:
@@ -53,3 +55,10 @@ def wait_for_wake_word():
         print("Stopped by user")
         porcupine.delete()
         return False
+
+
+if __name__ == "__main__":
+    if wait_for_wake_word():
+        print("Wake word detected!")
+    else:
+        print("Wake word detection stopped.")
