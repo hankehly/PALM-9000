@@ -21,10 +21,6 @@ def wait_for_wake_word():
             porcupine.frame_length * settings.sample_rate / porcupine.sample_rate
         )
 
-        print("porcupine.sample_rate: ", porcupine.sample_rate)
-        print("porcupine.frame_length: ", porcupine.frame_length)
-        print("input_samples_per_frame: ", input_samples_per_frame)
-
         with sd.InputStream(
             samplerate=settings.sample_rate,
             blocksize=input_samples_per_frame,

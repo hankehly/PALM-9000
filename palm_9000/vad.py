@@ -24,7 +24,7 @@ class Frame:
     def __repr__(self):
         return (
             f"Frame("
-            f"timestamp={round(self.timestamp, 5)}, "
+            f"timestamp={self.timestamp}, "
             f"duration={self.duration}, "
             f"bytes_length={len(self.bytes)})"
         )

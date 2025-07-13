@@ -1,9 +1,10 @@
 import io
+import time
 import wave
 
 import numpy as np
 import pyaudio
-import numpy as np
+import sounddevice as sd
 from scipy.signal import resample_poly
 
 
@@ -63,3 +64,14 @@ def play_audio(audio: bytes, sample_rate=16000, volume=1.0):
     stream.stop_stream()
     stream.close()
     pa.terminate()
+
+
+def wait_until_device_available(device_index, timeout=2.0):
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            sd.check_input_settings(device=device_index)
+            return True
+        except Exception:
+            time.sleep(0.05)
+    raise RuntimeError(f"Mic still unavailable after {timeout} seconds.")

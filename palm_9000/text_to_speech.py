@@ -4,7 +4,7 @@ from google.genai import types
 from palm_9000.settings import settings
 
 
-def generate_google_gemini_audio(text: str) -> bytes:
+def text_to_speech(text: str) -> bytes:
     """
     Generates speech from text using Google Gemini TTS.
     Returns the audio data as bytes.

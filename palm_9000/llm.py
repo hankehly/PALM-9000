@@ -34,6 +34,13 @@ trimmer = trim_messages(
 )
 
 
+def run_llm(state):
+    trimmed_messages = trimmer.invoke(state["messages"])
+    prompt = prompt_template.invoke({"messages": trimmed_messages})
+    new_message = chat_model.invoke(prompt)
+    return {**state, "messages": [new_message]}
+
+
 def strip_thoughts(text: str) -> str:
     """
     Strips the <think>...</think> blocks from the text.
