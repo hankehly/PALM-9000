@@ -9,7 +9,7 @@ from palm_9000.settings import settings
 from palm_9000.speech_to_text import speech_to_text, STT_SAMPLE_RATE
 from palm_9000.text_to_speech import text_to_speech_offline
 from palm_9000.utils import play_audio, wait_until_device_available, remove_whitespace
-from palm_9000.wake_word import wait_for_wake_word
+from palm_9000.wake_word import wait_for_wake_word_pvrecorder
 from palm_9000.vad import resample_frames, vad_pipeline, Frame
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import MessagesState, StateGraph
@@ -43,7 +43,8 @@ def main():
         wait_until_device_available(input_device, timeout=5.0)
 
         print("🌴 Waiting for wake word...")
-        if not wait_for_wake_word(device=input_device, sample_rate=input_sample_rate):
+        # if not wait_for_wake_word(device=input_device, sample_rate=input_sample_rate):
+        if not wait_for_wake_word_pvrecorder():
             break
 
         print("🌴 Waiting up to 5 seconds for microphone...")
