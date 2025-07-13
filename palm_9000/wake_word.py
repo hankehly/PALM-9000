@@ -5,7 +5,7 @@ from palm_9000.vad import resample
 from palm_9000.settings import settings
 
 
-def wait_for_wake_word():
+def wait_for_wake_word(device: int, sample_rate: int):
     """
     Waits for the wake word using Porcupine and sounddevice.
     This function blocks until the wake word is detected.
@@ -20,15 +20,15 @@ def wait_for_wake_word():
     try:
         # Determine how many input samples give us enough to downsample to one Porcupine frame
         input_samples_per_frame = int(
-            porcupine.frame_length * settings.sample_rate / porcupine.sample_rate
+            porcupine.frame_length * sample_rate / porcupine.sample_rate
         )
 
         with sd.InputStream(
-            samplerate=settings.sample_rate,
+            samplerate=sample_rate,
             blocksize=input_samples_per_frame,
             dtype="int16",
             channels=1,
-            device=settings.input_device,
+            device=device,
         ) as stream:
             print("Listening for wake word...")
 
@@ -36,8 +36,9 @@ def wait_for_wake_word():
                 block, _ = stream.read(input_samples_per_frame)
                 block = block.flatten()
                 # Downsample from 44100 Hz to 16000 Hz
+                # Sample rate values must be ints
                 downsampled = resample(
-                    block, settings.sample_rate, porcupine.sample_rate
+                    block, sample_rate, porcupine.sample_rate
                 )
                 pcm = np.clip(downsampled, -32768, 32767).astype(np.int16)
                 if len(pcm) != porcupine.frame_length:

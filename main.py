@@ -19,6 +19,7 @@ from palm_9000.vad import (
 )
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import MessagesState, StateGraph
+import sounddevice as sd
 
 VAD_FRAME_DURATION_MS = 30
 VAD_SAMPLE_RATE = 32000
@@ -35,25 +36,32 @@ def main():
 
     vad = webrtcvad.Vad(settings.vad_mode)
 
+    device = sd.query_devices(kind="input")
+    input_device = device["index"]
+    input_sample_rate = int(device["default_samplerate"])
+    # input_device = settings.input_device
+    # input_sample_rate = settings.sample_rate
+    print(f"🌴 Using input device: {input_device} at sample rate: {input_sample_rate}")
+
     while True:
         print("🌴 Waiting up to 5 seconds for microphone...")
-        wait_until_device_available(settings.input_device, timeout=5.0)
+        wait_until_device_available(input_device, timeout=5.0)
 
         print("🌴 Waiting for wake word...")
-        if not wait_for_wake_word():
+        if not wait_for_wake_word(device=input_device, sample_rate=input_sample_rate):
             break
 
         print("🌴 Waiting up to 5 seconds for microphone...")
-        wait_until_device_available(settings.input_device, timeout=5.0)
+        wait_until_device_available(input_device, timeout=5.0)
 
         # Use the vad_pipeline context manager to handle the generator chain
         pipeline_args = {
             "vad": vad,
-            "device": settings.input_device,
-            "input_sample_rate": settings.sample_rate,
+            "device": input_device,
+            "input_sample_rate": input_sample_rate,
             "vad_sample_rate": VAD_SAMPLE_RATE,
             "frame_duration_ms": VAD_FRAME_DURATION_MS,
-            "padding_duration_ms": 500,
+            "padding_duration_ms": 300,
             "silence_timeout": settings.silence_timeout,
         }
 
@@ -78,11 +86,11 @@ def main():
         )
 
         # Export to wav file for debugging
-        # scipy.io.wavfile.write(
-        #     f"output_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.wav",
-        #     STT_SAMPLE_RATE,
-        #     np.frombuffer(voiced_frame_bytes_stt_sr, dtype=np.int16),
-        # )
+        scipy.io.wavfile.write(
+            f"output_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.wav",
+            STT_SAMPLE_RATE,
+            np.frombuffer(voiced_frame_bytes_stt_sr, dtype=np.int16),
+        )
 
         print("🌴 Processing audio chunks for speech-to-text...")
         speech_to_text_result = speech_to_text(voiced_frame_bytes_stt_sr)
