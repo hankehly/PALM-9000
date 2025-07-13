@@ -75,3 +75,10 @@ def wait_until_device_available(device_index, timeout=2.0):
         except Exception:
             time.sleep(0.05)
     raise RuntimeError(f"Mic still unavailable after {timeout} seconds.")
+
+
+def remove_whitespace(text: str) -> str:
+    """
+    Removes all whitespace from the text.
+    """
+    return "".join(text.split())

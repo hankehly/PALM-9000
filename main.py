@@ -7,16 +7,10 @@ import webrtcvad
 from palm_9000.llm import run_llm
 from palm_9000.settings import settings
 from palm_9000.speech_to_text import speech_to_text, STT_SAMPLE_RATE
-from palm_9000.text_to_speech import text_to_speech, TTS_SAMPLE_RATE
-from palm_9000.utils import play_audio, wait_until_device_available
+from palm_9000.text_to_speech import text_to_speech_offline
+from palm_9000.utils import play_audio, wait_until_device_available, remove_whitespace
 from palm_9000.wake_word import wait_for_wake_word
-from palm_9000.vad import (
-    # microphone_audio_frame_generator,
-    resample_frames,
-    # vad_collector,
-    vad_pipeline,
-    Frame,
-)
+from palm_9000.vad import resample_frames, vad_pipeline, Frame
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import MessagesState, StateGraph
 import sounddevice as sd
@@ -42,6 +36,7 @@ def main():
     # input_device = settings.input_device
     # input_sample_rate = settings.sample_rate
     print(f"🌴 Using input device: {input_device} at sample rate: {input_sample_rate}")
+    print(f"🌴 Using VAD mode: {settings.vad_mode} (0=Aggressive, 3=Least Aggressive)")
 
     while True:
         print("🌴 Waiting up to 5 seconds for microphone...")
@@ -105,7 +100,7 @@ def main():
             config={"configurable": {"thread_id": THREAD_ID}},
         )
 
-        llm_response = state["messages"][-1].content
+        llm_response = remove_whitespace(state["messages"][-1].content)
         print(f"🌴 LLM response: {llm_response}")
 
         if not llm_response:
@@ -113,10 +108,15 @@ def main():
             continue
 
         print("🌴 Converting text to speech...")
-        text_to_speech_result = text_to_speech(llm_response)
+        # text_to_speech_result = text_to_speech(llm_response)
+        text_to_speech_result = text_to_speech_offline(llm_response)
 
         print("🌴 Playing audio response...")
-        play_audio(text_to_speech_result, sample_rate=TTS_SAMPLE_RATE, volume=2.0)
+        play_audio(
+            text_to_speech_result.audio_data,
+            sample_rate=text_to_speech_result.sample_rate,
+            volume=5.0,
+        )
 
 
 if __name__ == "__main__":
