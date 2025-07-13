@@ -11,9 +11,10 @@ from palm_9000.text_to_speech import text_to_speech, TTS_SAMPLE_RATE
 from palm_9000.utils import play_audio, wait_until_device_available
 from palm_9000.wake_word import wait_for_wake_word
 from palm_9000.vad import (
-    microphone_audio_frame_generator,
+    # microphone_audio_frame_generator,
     resample_frames,
-    vad_collector,
+    # vad_collector,
+    vad_pipeline,
     Frame,
 )
 from langgraph.checkpoint.memory import InMemorySaver
@@ -45,38 +46,23 @@ def main():
         print("🌴 Waiting up to 5 seconds for microphone...")
         wait_until_device_available(settings.input_device, timeout=5.0)
 
-        # Generate audio frames from the microphone input
-        raw_frame_generator = microphone_audio_frame_generator(
-            frame_duration_ms=VAD_FRAME_DURATION_MS,
-            sample_rate=settings.sample_rate,
-            device=settings.input_device,
-        )
+        # Use the vad_pipeline context manager to handle the generator chain
+        pipeline_args = {
+            "vad": vad,
+            "device": settings.input_device,
+            "input_sample_rate": settings.sample_rate,
+            "vad_sample_rate": VAD_SAMPLE_RATE,
+            "frame_duration_ms": VAD_FRAME_DURATION_MS,
+            "padding_duration_ms": 500,
+            "silence_timeout": settings.silence_timeout,
+        }
 
-        # Resample the audio frames to the VAD sample rate
-        resampled_frames = resample_frames(
-            raw_frame_generator,
-            original_sample_rate=settings.sample_rate,
-            target_sample_rate=VAD_SAMPLE_RATE,
-        )
-
-        # Collect voiced audio chunks using VAD
-        # The sample rate of each chunk will be VAD_SAMPLE_RATE
-        voiced_audio_generator = vad_collector(
-            sample_rate=VAD_SAMPLE_RATE,
-            frame_duration_ms=VAD_FRAME_DURATION_MS,
-            padding_duration_ms=500,
-            vad=vad,
-            frames=resampled_frames,
-            silence_timeout=settings.silence_timeout,
-        )
-
-        print("🌴 Collecting voiced audio chunks... (Start speaking)")
         voiced_frames_vad_sr = []
-        for chunk in voiced_audio_generator:
-            print(f"  Voiced audio chunk of length {len(chunk)} bytes detected.")
-            voiced_frames_vad_sr.append(
-                Frame(bytes=chunk, timestamp=None, duration=None)
-            )
+        print("🌴 Collecting voiced audio chunks... (Start speaking)")
+        with vad_pipeline(**pipeline_args) as voiced_audio_generator:
+            for chunk in voiced_audio_generator:
+                print(f"  Voiced audio chunk of length {len(chunk)} bytes detected.")
+                voiced_frames_vad_sr.append(Frame(bytes=chunk))
 
         # Resample back down to STT_SAMPLE_RATE
         print("🌴 Resampling audio chunks to speech-to-text sample rate...")

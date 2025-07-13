@@ -1,4 +1,5 @@
 import collections
+import contextlib
 import time
 from collections.abc import Iterable
 
@@ -16,7 +17,7 @@ class Frame:
     not to be confused with a single frame of audio (e.g., a snapshot of all channels at a given time).
     """
 
-    def __init__(self, bytes, timestamp, duration):
+    def __init__(self, bytes, timestamp = None, duration = None):
         self.bytes = bytes
         self.timestamp = timestamp
         self.duration = duration
@@ -30,29 +31,18 @@ class Frame:
         )
 
 
-def microphone_audio_frame_generator(
-    *,
-    frame_duration_ms: int,
-    sample_rate: int,
-    device: int,
+def frame_generator(
+    stream: sd.InputStream, *, frame_duration_ms: int
 ) -> Iterable[Frame]:
     """
-    Generate audio frames from the microphone.
+    Generate audio frames from an open stream.
     """
     duration = frame_duration_ms / 1000.0  # E.g., 0.03 seconds
-    frame_size = int(sample_rate * duration)  # E.g., 44100 * 0.03 = 1323 samples
     timestamp = 0.0
-    with sd.InputStream(
-        samplerate=sample_rate,
-        channels=1,
-        dtype="int16",
-        blocksize=frame_size,
-        device=device,
-    ) as stream:
-        while True:
-            audio = stream.read(frame_size)[0]
-            yield Frame(audio.tobytes(), timestamp, duration)
-            timestamp += duration
+    while True:
+        audio = stream.read(stream.blocksize)[0]
+        yield Frame(audio.tobytes(), timestamp, duration)
+        timestamp += duration
 
 
 def resample_frames(
@@ -155,7 +145,55 @@ def vad_collector(
     if triggered:
         log("-(%s)" % frame)
     log("\n")
-    # If we have any leftover voiced audio when we run out of input,
-    # yield it.
+    # If we have any leftover voiced audio when we run out of input, yield it.
     if voiced_frames:
         yield b"".join([f.bytes for f in voiced_frames])
+
+
+@contextlib.contextmanager
+def vad_pipeline(
+    vad: webrtcvad.Vad,
+    *,
+    device: int,
+    input_sample_rate: int,
+    vad_sample_rate: int,
+    frame_duration_ms: int,
+    padding_duration_ms: int,
+    silence_timeout: float,
+):
+    """
+    A context manager to set up and tear down the VAD pipeline.
+    This ensures that the microphone stream is properly closed.
+    """
+    frame_size = int(input_sample_rate * (frame_duration_ms / 1000.0))
+    stream = sd.InputStream(
+        samplerate=input_sample_rate,
+        channels=1,
+        dtype="int16",
+        blocksize=frame_size,
+        device=device,
+    )
+    stream.start()
+    print("Microphone stream opened.")
+    try:
+        raw_frame_generator = frame_generator(
+            stream, frame_duration_ms=frame_duration_ms
+        )
+        resampled_frames = resample_frames(
+            raw_frame_generator,
+            original_sample_rate=input_sample_rate,
+            target_sample_rate=vad_sample_rate,
+        )
+        voiced_audio_generator = vad_collector(
+            sample_rate=vad_sample_rate,
+            frame_duration_ms=frame_duration_ms,
+            padding_duration_ms=padding_duration_ms,
+            vad=vad,
+            frames=resampled_frames,
+            silence_timeout=silence_timeout,
+        )
+        yield voiced_audio_generator
+    finally:
+        stream.stop()
+        stream.close()
+        print("Microphone stream closed.")
