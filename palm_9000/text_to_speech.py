@@ -80,11 +80,3 @@ def generate_google_gemini_audio(text: str) -> bytes:
     )
     result = response.candidates[0].content.parts[0].inline_data.data
     return result
-
-
-def speak_text_with_google_gemini(text: str, volume: float = 1.0) -> None:
-    """
-    Speak the given text using Google Gemini TTS.
-    """
-    data = generate_google_gemini_audio(text)
-    play_audio(data, volume=volume)
