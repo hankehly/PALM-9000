@@ -18,6 +18,7 @@ class Settings(BaseSettings):
 
     google_api_key: SecretStr
     google_tts_voice_name: str = "Enceladus"
+    google_cloud_project: str
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
