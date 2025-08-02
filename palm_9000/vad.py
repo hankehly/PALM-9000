@@ -164,6 +164,12 @@ def vad_pipeline(
     """
     A context manager to set up and tear down the VAD pipeline.
     This ensures that the microphone stream is properly closed.
+
+    Usage:
+    with vad_pipeline(vad, device=1, input_sample_rate=16000, vad_sample_rate=16000,
+                      frame_duration_ms=30, padding_duration_ms=300, silence_timeout=2.0) as generator:
+        for voiced_audio in generator:
+            process_voiced_audio(voiced_audio)
     """
     frame_size = int(input_sample_rate * (frame_duration_ms / 1000.0))
     stream = sd.InputStream(
