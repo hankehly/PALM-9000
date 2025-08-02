@@ -8,3 +8,5 @@ models/*
 !models/.gitkeep
 __pycache__
 *.pcm
+*.onnx
+*.json
