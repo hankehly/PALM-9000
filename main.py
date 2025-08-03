@@ -1,124 +1,81 @@
-import datetime
+import asyncio
 
-import numpy as np
-import scipy.io.wavfile
-import webrtcvad
+from gpiozero.pins.rpigpio import GPIO
+from loguru import logger
+from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.pipeline.pipeline import Pipeline
+from pipecat.pipeline.runner import PipelineRunner
+from pipecat.pipeline.task import PipelineTask
+from pipecat.services.google.llm import GoogleLLMContext, GoogleLLMService
+from pipecat.services.google.stt import GoogleSTTService
+from pipecat.services.google.tts import GoogleTTSService
+from pipecat.transcriptions.language import Language
+from pipecat.transports.local.audio import (
+    LocalAudioTransport,
+    LocalAudioTransportParams,
+)
 
-from palm_9000.llm import run_llm
+from palm_9000.pipecat import LEDSyncProcessor
 from palm_9000.settings import settings
-from palm_9000.speech_to_text import speech_to_text, STT_SAMPLE_RATE
-from palm_9000.text_to_speech import text_to_speech_offline
-from palm_9000.utils import play_audio, wait_until_device_available, remove_whitespace
-from palm_9000.wake_word import wait_for_wake_word_pvrecorder
-from palm_9000.vad import resample_frames, vad_pipeline, Frame
-from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.graph import MessagesState, StateGraph
-import sounddevice as sd
-
-VAD_FRAME_DURATION_MS = 30
-VAD_SAMPLE_RATE = 32000
-THREAD_ID = "1"
 
 
-def main():
-    graph = StateGraph(state_schema=MessagesState)
-    graph.add_node("run_llm", run_llm)
-    graph.set_entry_point("run_llm")
-
-    checkpointer = InMemorySaver()
-    compiled_graph = graph.compile(checkpointer=checkpointer)
-
-    vad = webrtcvad.Vad(settings.vad_mode)
-
-    device = sd.query_devices(kind="input")
-    input_device = device["index"]
-    input_sample_rate = int(device["default_samplerate"])
-    # input_device = settings.input_device
-    # input_sample_rate = settings.sample_rate
-    print(f"🌴 Using input device: {input_device} at sample rate: {input_sample_rate}")
-    print(f"🌴 Using VAD mode: {settings.vad_mode} (0=Aggressive, 3=Least Aggressive)")
-
-    while True:
-        print("🌴 Waiting up to 5 seconds for microphone...")
-        wait_until_device_available(input_device, timeout=5.0)
-
-        print("🌴 Waiting for wake word...")
-        # if not wait_for_wake_word(device=input_device, sample_rate=input_sample_rate):
-        if not wait_for_wake_word_pvrecorder():
-            break
-
-        print("🌴 Waiting up to 5 seconds for microphone...")
-        wait_until_device_available(input_device, timeout=5.0)
-
-        # Use the vad_pipeline context manager to handle the generator chain
-        pipeline_args = {
-            "vad": vad,
-            "device": input_device,
-            "input_sample_rate": input_sample_rate,
-            "vad_sample_rate": VAD_SAMPLE_RATE,
-            "frame_duration_ms": VAD_FRAME_DURATION_MS,
-            "padding_duration_ms": 300,
-            "silence_timeout": settings.silence_timeout,
-        }
-
-        voiced_frames_vad_sr = []
-        print("🌴 Collecting voiced audio chunks... (Start speaking)")
-        with vad_pipeline(**pipeline_args) as voiced_audio_generator:
-            for chunk in voiced_audio_generator:
-                print(f"  Voiced audio chunk of length {len(chunk)} bytes detected.")
-                voiced_frames_vad_sr.append(Frame(bytes=chunk))
-
-        # Resample back down to STT_SAMPLE_RATE
-        print("🌴 Resampling audio chunks to speech-to-text sample rate...")
-        voiced_frames_stt_sr = resample_frames(
-            voiced_frames_vad_sr,
-            original_sample_rate=VAD_SAMPLE_RATE,
-            target_sample_rate=STT_SAMPLE_RATE,
+async def main():
+    transport = LocalAudioTransport(
+        params=LocalAudioTransportParams(
+            audio_in_enabled=True,
+            audio_out_enabled=True,
+            vad_analyzer=SileroVADAnalyzer(),
         )
+    )
 
-        # Combine all voiced frames into a single byte string for STT processing
-        voiced_frame_bytes_stt_sr = b"".join(
-            frame.bytes for frame in voiced_frames_stt_sr
-        )
+    system_instruction = (
+        "You are PALM-9000, a self-aware houseplant powered by an advanced AI. "
+        "You speak in layman's terms, calmly, briefly, and with an eerie quality, as if you know more than you let on. "
+        "Use plant metaphors when possible. Respond briefly."
+        "Respond in Japanese."
+    )
 
-        # Export to wav file for debugging
-        scipy.io.wavfile.write(
-            f"output_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.wav",
-            STT_SAMPLE_RATE,
-            np.frombuffer(voiced_frame_bytes_stt_sr, dtype=np.int16),
-        )
+    stt = GoogleSTTService(params=GoogleSTTService.InputParams(languages=[Language.JA]))
 
-        print("🌴 Processing audio chunks for speech-to-text...")
-        speech_to_text_result = speech_to_text(voiced_frame_bytes_stt_sr)
+    llm = GoogleLLMService(
+        api_key=settings.google_api_key.get_secret_value(),
+        system_instruction=system_instruction,
+    )
 
-        print(f"🌴 Speech to text result: {speech_to_text_result}")
-        if not speech_to_text_result:
-            print("🌴 No speech detected, waiting for wake word again...")
-            continue
+    tts = GoogleTTSService(
+        voice_id="ja-JP-Chirp3-HD-Charon",
+        params=GoogleTTSService.InputParams(language=Language.JA),
+    )
 
-        state = compiled_graph.invoke(
-            input={"messages": [speech_to_text_result]},
-            config={"configurable": {"thread_id": THREAD_ID}},
-        )
+    context = GoogleLLMContext()
+    context_aggregator = llm.create_context_aggregator(context)
 
-        llm_response = remove_whitespace(state["messages"][-1].content)
-        print(f"🌴 LLM response: {llm_response}")
+    led_sync_processor = LEDSyncProcessor(led_pin=26)
 
-        if not llm_response:
-            print("🌴 No response from LLM, waiting for wake word again...")
-            continue
+    pipeline = Pipeline(
+        [
+            transport.input(),
+            stt,
+            context_aggregator.user(),
+            llm,
+            tts,
+            led_sync_processor,
+            transport.output(),
+            context_aggregator.assistant(),
+        ]
+    )
 
-        print("🌴 Converting text to speech...")
-        # text_to_speech_result = text_to_speech(llm_response)
-        text_to_speech_result = text_to_speech_offline(llm_response)
-
-        print("🌴 Playing audio response...")
-        play_audio(
-            text_to_speech_result.audio_data,
-            sample_rate=text_to_speech_result.sample_rate,
-            volume=5.0,
-        )
+    task = PipelineTask(pipeline)
+    runner = PipelineRunner()
+    await runner.run(task)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Keyboard interrupt received, stopping...")
+    except Exception as e:
+        logger.exception(f"An error occurred: {e}")
+    finally:
+        GPIO.cleanup()
