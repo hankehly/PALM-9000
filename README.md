@@ -36,3 +36,12 @@ flowchart TD
     style sensor fill:#ccc,stroke:#666
     style leds fill:#ffb6c1,stroke:#666
 ```
+
+# Todo
+
+- [ ] LED integration for visual feedback
+- [ ] Moisture sensor for health monitoring
+- [ ] Sunlight sensor for optimal placement
+- [ ] YouTube video
+- [ ] Larger speaker for better audio
+- [ ] Deploy to the cloud for remote access
