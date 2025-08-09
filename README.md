@@ -101,6 +101,26 @@ Default Sink: echosink
 Default Source: echosource
 ```
 
+### Set as default (optional)
+
+To set AEC as the default, edit the PulseAudio configuration file.
+```sh
+sudo vi /etc/pulse/default.pa
+```
+
+Add at the end:
+```sh
+load-module module-echo-cancel source_name=echosource sink_name=echosink aec_method=webrtc
+set-default-source echosource
+set-default-sink echosink
+```
+
+Save, then restart PulseAudio:
+```sh
+pulseaudio -k
+pulseaudio --start
+```
+
 ### Test
 
 To test that AEC is working, we'll record our voice while playing audio through the speaker. If AEC is working correctly, we should only hear our voice in the recording, while the audio from the speaker is removed.
