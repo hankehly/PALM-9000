@@ -37,11 +37,106 @@ flowchart TD
     style leds fill:#ffb6c1,stroke:#666
 ```
 
+# How to Enable Acoustic Echo Cancellation (AEC) on Headless Raspberry PI via macOS
+
+Raspberry PI's sound server PulseAudio can be configured to use Acoustic Echo Cancellation (AEC) to reduce echo from the speaker when using a microphone. The following setup assumes you are connecting to a headless 64-bit Raspberry Pi from macOS.
+
+On macOS, install an X server (e.g., XQuartz).
+```sh
+brew install --cask xquartz
+```
+
+After installing, log out and log back in (or reboot) so `$DISPLAY` is set correctly on macOS.
+```sh
+echo $DISPLAY
+```
+
+You should see something like this:
+```sh
+/private/tmp/com.apple.launchd.N7l0ZjE86u/org.xquartz:0
+```
+
+Login to the raspberry pi with X11 forwarding enabled. This will allow you to see the GUI from your Raspberry Pi on your macOS.
+```sh
+ssh -Y <username>@<raspberry_pi_ip>
+```
+
+Now inside the Raspberry Pi, install PulseAudio and its utilities. PulseAudio is probably already installed on the Raspberry Pi, but you may need to install pavucontrol.
+```sh
+sudo apt update
+sudo apt install pulseaudio pulseaudio-utils pavucontrol
+```
+
+Manually enable AEC.
+```sh
+pactl load-module module-echo-cancel \
+    source_name=echosource sink_name=echosink \
+    aec_method=webrtc
+```
+
+Make sure the AEC devices exist. You should see something like `echosource` and `echosink`.
+```sh
+pactl list short sources
+pactl list short sinks
+```
+
+Run pavucontrol on the Raspberry Pi.
+```sh
+pavucontrol
+```
+
+You should see a window like this appear on your macOS. Go to the Output Devices and Input Devices tabs and click the green icon next to the option showing "echo cancelled" in the title.
+
+![Pavucontrol](images/pavucontrol.png)
+
+Now go back to the Raspberry Pi and confirm it's working.
+```sh
+pactl info | grep "Default Sink"
+pactl info | grep "Default Source"
+```
+
+You should see:
+```sh
+Default Sink: echosink
+Default Source: echosource
+```
+
+### Test
+
+To test that AEC is working, we'll record our voice while playing audio through the speaker. If AEC is working correctly, we should only hear our voice in the recording, while the audio from the speaker is removed.
+
+First, prepare a sample audio file to play through the speaker.
+```sh
+wget https://download.samplelib.com/wav/sample-3s.wav
+```
+
+Record from the AEC source via Pulse. (Note that the `-f cd` option is shorthand for recording 16 bit little endian, 44100 Hz, stereo quality.)
+```sh
+PULSE_SOURCE=echosource arecord -D pulse -f cd -d 10 test.wav
+```
+
+While you're recording, play the sample audio file in a separate terminal and also speak into the microphone.
+```sh
+# Flow:
+#  1. Say: "Test 1, 2, 3"
+#  2. Play test audio
+aplay sample-3s.wav
+#  3. Say: "Test 4, 5, 6"
+```
+
+Now play the recording.
+```sh
+PULSE_SINK=echosink aplay -D pulse test.wav
+```
+
+The recording should contain your voice (mic) but little to none of the sample audio being played from the speaker.
+
 # Todo
 
 - [ ] LED integration for visual feedback
 - [ ] Moisture sensor for health monitoring
 - [ ] Sunlight sensor for optimal placement
+- [ ] AEC
 - [ ] YouTube video
 - [ ] Larger speaker for better audio
 - [ ] Deploy to the cloud for remote access
