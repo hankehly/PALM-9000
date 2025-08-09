@@ -19,15 +19,11 @@ from palm_9000.settings import settings
 
 
 async def main():
-    def write_audio_frame_callback(frame):
-        print("Writing audio frame:", frame)
-
     transport = LocalAudioTransport(
         params=LocalAudioTransportParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
             vad_analyzer=SileroVADAnalyzer(),
-            write_audio_frame_callback=write_audio_frame_callback,
         )
     )
 
