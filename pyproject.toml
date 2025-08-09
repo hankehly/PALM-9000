@@ -36,4 +36,5 @@ dependencies = [
     "rpi-gpio>=0.7.1",
     "luma-led-matrix>=1.7.1",
     "spidev>=3.7",
+    "pigpio>=1.78",
 ]

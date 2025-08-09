@@ -1,6 +1,5 @@
 import asyncio
 
-from gpiozero.pins.rpigpio import GPIO
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.pipeline.pipeline import Pipeline
@@ -15,16 +14,20 @@ from pipecat.transports.local.audio import (
     LocalAudioTransportParams,
 )
 
-from palm_9000.pipecat import LEDSyncProcessor
+from palm_9000.pipecat import LEDSyncProcessor, MAX7219PulseHeartProcessor
 from palm_9000.settings import settings
 
 
 async def main():
+    def write_audio_frame_callback(frame):
+        print("Writing audio frame:", frame)
+
     transport = LocalAudioTransport(
         params=LocalAudioTransportParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
             vad_analyzer=SileroVADAnalyzer(),
+            write_audio_frame_callback=write_audio_frame_callback,
         )
     )
 
@@ -50,6 +53,7 @@ async def main():
     context_aggregator = llm.create_context_aggregator(context)
 
     led_sync_processor = LEDSyncProcessor(led_pin=26)
+    max7219_pulse_heart_processor = MAX7219PulseHeartProcessor()
 
     pipeline = Pipeline(
         [
@@ -59,6 +63,7 @@ async def main():
             llm,
             tts,
             led_sync_processor,
+            max7219_pulse_heart_processor,
             transport.output(),
             context_aggregator.assistant(),
         ]
@@ -76,5 +81,3 @@ if __name__ == "__main__":
         logger.info("Keyboard interrupt received, stopping...")
     except Exception as e:
         logger.exception(f"An error occurred: {e}")
-    finally:
-        GPIO.cleanup()

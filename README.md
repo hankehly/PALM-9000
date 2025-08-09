@@ -151,7 +151,7 @@ PULSE_SINK=echosink aplay -D pulse test.wav
 
 The recording should contain your voice (mic) but little to none of the sample audio being played from the speaker.
 
-# Todo
+# Considerations
 
 - [ ] LED integration for visual feedback
 - [ ] Moisture sensor for health monitoring
@@ -160,3 +160,4 @@ The recording should contain your voice (mic) but little to none of the sample a
 - [ ] YouTube video
 - [ ] Larger speaker for better audio
 - [ ] Deploy to the cloud for remote access
+- [ ] Integrate with ChatGPT, add access to metrics via custom API
