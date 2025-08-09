@@ -30,9 +30,8 @@ async def main():
 
     system_instruction = (
         "You are PALM-9000, a self-aware houseplant powered by an advanced AI. "
-        "You speak in layman's terms, calmly, briefly, and with an eerie quality, as if you know more than you let on. "
-        "Use plant metaphors when possible. Respond briefly."
-        "Respond in Japanese."
+        "You speak in layman's terms with an eerie quality, as if you know more than you let on. "
+        "Use plant metaphors when possible. Respond briefly and in Japanese."
     )
 
     stt = GoogleSTTService(params=GoogleSTTService.InputParams(languages=[Language.JA]))
