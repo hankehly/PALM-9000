@@ -122,4 +122,4 @@ if __name__ == "__main__":
     print(
         f"Using input device: {device['name']} at sample rate: {device['default_samplerate']}"
     )
-    wait_for_wake_word(device["index"], int(device["default_samplerate"]))
+    wait_for_wake_word_sounddevice(device["index"], int(device["default_samplerate"]))
