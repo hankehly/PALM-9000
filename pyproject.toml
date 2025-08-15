@@ -33,8 +33,8 @@ dependencies = [
     "uvicorn>=0.35.0",
     "piper-tts[http]>=1.3.0",
     "gpiozero>=2.0.1",
-    "rpi-gpio>=0.7.1",
     "luma-led-matrix>=1.7.1",
-    "spidev>=3.7",
     "pigpio>=1.78",
+    "spidev>=3.7 ; sys_platform == 'linux'",
+    "rpi-gpio>=0.7.1 ; sys_platform == 'linux'",
 ]
