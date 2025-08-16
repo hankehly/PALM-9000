@@ -156,12 +156,18 @@ _INT16_MAX = 32768.0
 class Max7219AmplitudeHeart:
     """
     Drive a heart icon on an 8x8 MAX7219, brightness = audio amplitude.
-    Call `start()` once. Feed audio via the callback from `make_callback(...)`.
+    Call `start()` once. Feed audio via `heart.process_audio(audio_bytes)`.
     """
 
     def __init__(
-        self, fps=90, min_brightness=4, max_brightness=255, ema=0.35, gamma=2.2
-    ):
+        self,
+        fps: int = 90,
+        min_brightness: int = 4,
+        max_brightness: int = 255,
+        ema: float = 0.35,
+        gamma: float = 2.2,
+        channels: int = 1,
+    ) -> None:
         # Display init
         self.serial = spi(port=0, device=0, gpio=noop())
         self.device = max7219(self.serial, cascaded=1)
@@ -172,6 +178,7 @@ class Max7219AmplitudeHeart:
         self.max_brightness = max_brightness
         self.ema = ema  # smoothing (0..1), higher = snappier
         self.gamma = gamma  # perceptual correction
+        self.channels = max(1, int(channels))
 
         # State
         self._task: asyncio.Task | None = None
@@ -180,14 +187,13 @@ class Max7219AmplitudeHeart:
         self._level = 0.0  # latest raw level 0..1 (thread-safe)
         self._lock = threading.Lock()
 
-    # ---------- public control ----------
-    async def start(self):
+    async def start(self) -> None:
         if self._task and not self._task.done():
             return
         self._stop_evt.clear()
         self._task = asyncio.create_task(self._run())
 
-    async def stop(self):
+    async def stop(self) -> None:
         if not self._task:
             return
         self._stop_evt.set()
@@ -209,35 +215,28 @@ class Max7219AmplitudeHeart:
             except Exception:
                 pass
 
-    def make_callback(self, channels: int):
+    def process_audio(self, audio_bytes: bytes) -> None:
         """
-        Returns a function you can call with audio bytes (int16 interleaved).
-        Safe to call from any thread (blocking write, PyAudio callback, etc.).
+        Feed audio bytes (int16 interleaved). Uses self.channels to downmix
+        if needed. Safe to call from any thread.
         """
-
-        def _cb(audio_bytes: bytes):
-            print(len(audio_bytes))
-            if not audio_bytes:
+        if not audio_bytes:
+            self._set_level(0.0)
+            return
+        x = np.frombuffer(audio_bytes, dtype=np.int16)
+        ch = self.channels
+        if ch > 1:
+            frames = (x.size // ch) * ch
+            if frames == 0:
                 self._set_level(0.0)
                 return
-            x = np.frombuffer(audio_bytes, dtype=np.int16)
-            if channels > 1:
-                frames = (x.size // channels) * channels
-                if frames == 0:
-                    self._set_level(0.0)
-                    return
-                x = x[:frames].reshape(-1, channels).mean(axis=1)
-            xf = x.astype(np.float32) / _INT16_MAX
-            # RMS; you could blend with peak if you want more punch
-            level = float(np.sqrt(np.mean(xf * xf)))
-            # gentle headroom so small signals still show
-            level = max(0.0, min(1.0, level * 1.6))
-            self._set_level(level)
+            x = x[:frames].reshape(-1, ch).mean(axis=1)
+        xf = x.astype(np.float32) / _INT16_MAX
+        level = float(np.sqrt(np.mean(xf * xf)))
+        level = max(0.0, min(1.0, level * 1.6))  # small headroom
+        self._set_level(level)
 
-        return _cb
-
-    # ---------- internals ----------
-    def _set_level(self, v: float):
+    def _set_level(self, v: float) -> None:
         v = 0.0 if v < 0 else (1.0 if v > 1.0 else v)
         with self._lock:
             self._level = v
@@ -255,7 +254,7 @@ class Max7219AmplitudeHeart:
             perceptual * (self.max_brightness - self.min_brightness)
         )
 
-    def _draw_heart(self):
+    def _draw_heart(self) -> None:
         pixels = [
             # fmt: off
                     (1, 1),                                 (6, 1),
@@ -270,7 +269,7 @@ class Max7219AmplitudeHeart:
             for x, y in pixels:
                 draw.point((x, y), fill="white")
 
-    async def _run(self):
+    async def _run(self) -> None:
         period = 1.0 / float(self.fps)
         try:
             while not self._stop_evt.is_set():
