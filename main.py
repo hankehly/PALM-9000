@@ -6,6 +6,10 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
 from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
+from pipecat.services.gemini_multimodal_live.gemini import (
+    GeminiMultimodalLiveLLMService,
+    InputParams as GeminiMultimodalLiveInputParams,
+)
 from pipecat.services.google.llm import GoogleLLMContext, GoogleLLMService
 from pipecat.services.google.stt import GoogleSTTService
 from pipecat.services.google.tts import GoogleTTSService
@@ -38,20 +42,32 @@ async def main():
         params=LocalAudioTransportParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
-            vad_analyzer=SileroVADAnalyzer(),
+            # vad_analyzer=SileroVADAnalyzer(),
         )
     )
 
     stt = GoogleSTTService(params=GoogleSTTService.InputParams(languages=[Language.JA]))
 
-    llm = GoogleLLMService(
+    system_instruction = (
+        "You are PALM-9000, a self-aware houseplant powered by an advanced AI. "
+        "You speak in layman's terms with an eerie quality, as if you know more than you let on. "
+        "すべて日本語で出力してください。翻訳・英訳・ローマ字・ふりがな・注釈・補足は一切表示しないでください。"
+        "括弧（）の使用も避けてください。"
+    )
+
+    # llm = GoogleLLMService(
+    #     api_key=settings.google_api_key.get_secret_value(),
+    #     model="gemini-2.0-flash",
+    #     system_instruction=system_instruction,
+    # )
+
+    llm = GeminiMultimodalLiveLLMService(
         api_key=settings.google_api_key.get_secret_value(),
-        system_instruction=(
-            "You are PALM-9000, a self-aware houseplant powered by an advanced AI. "
-            "You speak in layman's terms with an eerie quality, as if you know more than you let on. "
-            "すべて日本語で出力してください。翻訳・英訳・ローマ字・ふりがな・注釈・補足は一切表示しないでください。"
-            "括弧（）の使用も避けてください。"
-        ),
+        # model="models/gemini-2.0-flash-live-001",
+        model="models/gemini-live-2.5-flash-preview",
+        system_instruction=system_instruction,
+        voice_id="Puck",  # Aoede, Charon, Fenrir, Kore, Puck
+        params=GeminiMultimodalLiveInputParams(language=Language.JA),
     )
 
     tts = GoogleTTSService(
@@ -65,14 +81,14 @@ async def main():
     pipeline = Pipeline(
         [
             transport.input(),
-            stt,
-            context_aggregator.user(),
+            # stt,
+            # context_aggregator.user(),
             llm,
-            tts,
+            # tts,
             transport.output(),
-            audio_recording_control_processor,
-            audio_buffer,
-            context_aggregator.assistant(),
+            # audio_recording_control_processor,
+            # audio_buffer,
+            # context_aggregator.assistant(),
         ]
     )
 
