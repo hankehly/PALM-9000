@@ -1,43 +1,67 @@
 # PALM-9000
 PALM-9000 is a Raspberry Pi and LLM–powered talking palm tree—ever-watchful, eerily articulate, and not entirely sure it should let you prune that branch.
 
-# 🌴 Architecture Diagram Outline
+# Raspberry Pi Configuration
 
-```mermaid
-flowchart TD
-    user(User) --> mic(Microphone 🎙️)
-    mic --> pi(Raspberry Pi 🧠)
-    
-    subgraph Raspberry Pi
-        pi_in(Audio Input - Speech to Text)
-        pi_llm(LLM Request - Local or Cloud)
-        pi_out(Text to Speech)
-    end
+## Enable WM8960 HAT Interfaces & Driver
 
-    pi --> pi_in
-    pi_in --> pi_llm
-    pi_llm --> pi_out
-    pi_out --> speaker(Speaker 🔊)
-    speaker --> palm(PALM-9000 🌴)
+Edit `/boot/firmware/config.txt` (add these if not present), then reboot:
+```sh
+dtparam=i2s=on
+dtparam=i2c_arm=on
 
-    %% Optional enhancements
-    user -->|Optional| sensor(Proximity Sensor / Voice Trigger)
-    sensor --> pi
-    pi -->|Optional| leds(LEDs / Expression Feedback)
-
-    style user fill:#f0f0f0,stroke:#333,stroke-width:1px
-    style mic fill:#f9f,stroke:#333
-    style pi fill:#ffd700,stroke:#333,stroke-width:1px
-    style pi_in fill:#ffe4b5
-    style pi_llm fill:#ffe4b5
-    style pi_out fill:#ffe4b5
-    style speaker fill:#bbf,stroke:#333
-    style palm fill:#98fb98,stroke:#333,stroke-width:2px
-    style sensor fill:#ccc,stroke:#666
-    style leds fill:#ffb6c1,stroke:#666
+# Comment out this line unless using the WM8960 HAT
+dtoverlay=wm8960-soundcard
 ```
 
-# How to Enable Acoustic Echo Cancellation (AEC) on Headless Raspberry PI via macOS
+Also edit /etc/modules and add (if not already):
+```sh
+i2c-dev
+```
+
+Reboot.
+```sh
+sudo reboot
+```
+
+Confirm HAT is detected.
+```sh
+# I2C control plane (WM8960 is usually at 0x1a)
+sudo apt-get update -y && sudo apt-get install -y i2c-tools alsa-utils
+sudo i2cdetect -y 1
+
+# ALSA sees the sound card? (should see wm8960-soundcard)
+aplay -l
+```
+
+Unmute outputs & route PCM.
+```sh
+# Unmute headphone output
+amixer -c 0 sset 'Headphone' 80% unmute
+
+# Unmute DAC to headphone path
+amixer -c 0 sset 'Playback' 80% unmute
+
+# Unmute DAC to speaker path too (just in case it’s required in the route)
+amixer -c 0 sset 'Speaker' 80% unmute
+
+# Some WM8960 drivers expose "Mono Out" — unmute it as well
+amixer -c 0 sset 'Mono Out' 80% unmute
+
+# Route DAC PCM to outputs
+amixer -c 0 sset 'Left Output Mixer PCM' on
+amixer -c 0 sset 'Right Output Mixer PCM' on
+```
+
+Plugin a speaker or headphones and play a quick test:
+```sh
+speaker-test -c 2 -t wav -l 1
+```
+
+
+## Enable Acoustic Echo Cancellation (AEC)
+
+Without Acoustic Echo Cancellation (AEC), speaker output may be picked up as microphone input, causing a feedback loop where the agent hears its own output and responds to itself.
 
 Raspberry PI's sound server PulseAudio can be configured to use Acoustic Echo Cancellation (AEC) to reduce echo from the speaker when using a microphone. The following setup assumes you are connecting to a headless 64-bit Raspberry Pi from macOS.
 
