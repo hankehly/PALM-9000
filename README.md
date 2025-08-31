@@ -3,6 +3,8 @@ PALM-9000 is a Raspberry Pi and LLM–powered talking palm tree—ever-watchful,
 
 # Raspberry Pi Configuration
 
+![Raspberry Pi Zero 2W GPIO Pinout](images/Raspberry-Pi-Zero-2W-GPIO-Pinout.png)
+
 ## Enable WM8960 HAT Interfaces & Driver
 
 Edit `/boot/firmware/config.txt` (add these if not present), then reboot:
@@ -42,8 +44,9 @@ amixer -c 0 sset 'Headphone' 80% unmute
 # Unmute DAC to headphone path
 amixer -c 0 sset 'Playback' 80% unmute
 
-# Unmute DAC to speaker path too (just in case it’s required in the route)
+# Turn on the speaker outputs
 amixer -c 0 sset 'Speaker' 80% unmute
+amixer -c 0 sset 'Speaker Playback ZC' on
 
 # Some WM8960 drivers expose "Mono Out" — unmute it as well
 amixer -c 0 sset 'Mono Out' 80% unmute
@@ -58,6 +61,10 @@ Plugin a speaker or headphones and play a quick test:
 speaker-test -c 2 -t wav -l 1
 ```
 
+Save your mixer state so it persists across reboots.
+```sh
+sudo alsactl store
+```
 
 ## Enable Acoustic Echo Cancellation (AEC)
 
@@ -175,13 +182,10 @@ PULSE_SINK=echosink aplay -D pulse test.wav
 
 The recording should contain your voice (mic) but little to none of the sample audio being played from the speaker.
 
-# Considerations
+# Future Work
 
-- [ ] LED integration for visual feedback
 - [ ] Moisture sensor for health monitoring
 - [ ] Sunlight sensor for optimal placement
-- [ ] AEC
 - [ ] YouTube video
-- [ ] Larger speaker for better audio
 - [ ] Deploy to the cloud for remote access
 - [ ] Integrate with ChatGPT, add access to metrics via custom API
