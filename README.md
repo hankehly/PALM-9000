@@ -5,14 +5,45 @@ PALM-9000 is a Raspberry Pi and LLM–powered talking palm tree—ever-watchful,
 
 ![Raspberry Pi Zero 2W GPIO Pinout](images/Raspberry-Pi-Zero-2W-GPIO-Pinout.png)
 
+## Connect the INMP441 Microphone
+
+![GPIO INMP441 Pinout Diagram](images/GPIO-INMP441-Pinout-Diagram.png)
+
+Edit `/boot/firmware/config.txt` (add these if not present):
+```
+dtparam=i2s=on
+dtoverlay=googlevoicehat-soundcard
+```
+
+Reboot.
+```sh
+sudo reboot
+```
+
+Confirm ALSA sees the mic.
+```sh
+# You should see something like "Google voiceHAT SoundCard HiFi"
+arecord -l
+```
+
+Record a test sample
+```sh
+# Replace 1 with the card number from the previous command
+arecord -D plughw:1,0 -f cd -c 1 -r 44100 -d 5 test.wav
+```
+
+Play back the test sample.
+```sh
+# Replace the first 0 with the connected speaker device number
+aplay -D plughw:0,0 test.wav
+```
+
 ## Enable WM8960 HAT Interfaces & Driver
 
-Edit `/boot/firmware/config.txt` (add these if not present), then reboot:
+Edit `/boot/firmware/config.txt` (add these if not present):
 ```sh
 dtparam=i2s=on
 dtparam=i2c_arm=on
-
-# Comment out this line unless using the WM8960 HAT
 dtoverlay=wm8960-soundcard
 ```
 
@@ -38,20 +69,11 @@ aplay -l
 
 Unmute outputs & route PCM.
 ```sh
-# Unmute headphone output
 amixer -c 0 sset 'Headphone' 80% unmute
-
-# Unmute DAC to headphone path
 amixer -c 0 sset 'Playback' 80% unmute
-
-# Turn on the speaker outputs
 amixer -c 0 sset 'Speaker' 80% unmute
 amixer -c 0 sset 'Speaker Playback ZC' on
-
-# Some WM8960 drivers expose "Mono Out" — unmute it as well
 amixer -c 0 sset 'Mono Out' 80% unmute
-
-# Route DAC PCM to outputs
 amixer -c 0 sset 'Left Output Mixer PCM' on
 amixer -c 0 sset 'Right Output Mixer PCM' on
 ```
