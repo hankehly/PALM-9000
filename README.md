@@ -5,7 +5,14 @@ PALM-9000 is a Raspberry Pi and LLM–powered talking palm tree—ever-watchful,
 
 ![Raspberry Pi Zero 2W GPIO Pinout](images/Raspberry-Pi-Zero-2W-GPIO-Pinout.png)
 
-## 1. Enable SPI
+## 1. Install PortAudio for Audio I/O
+
+```sh
+sudo apt update
+sudo apt install -y portaudio19-dev
+```
+
+## 2. Enable SPI
 
 Edit `/boot/firmware/config.txt` and add (if not already):
 ```sh
@@ -23,7 +30,7 @@ Verify that the device exists.
 ls /dev/spi*
 ```
 
-## 2. Connect the OTG USB Cable and USB Audio Adapter
+## 3. Connect the OTG USB Cable and USB Audio Adapter
 
 Hook a USB OTG cable to the Pi Zero's USB port, then connect a USB audio adapter to the OTG cable. For this project, I used a [UGREEN 10396](https://www.amazon.co.jp/dp/B00LN3LQKQ) and [ALLVD B0CC519BSM](https://www.amazon.co.jp/dp/B0CC519BSM).
 
@@ -37,7 +44,7 @@ Do a quick test to confirm sound output. The `-D plughw:1,0` option specifies ca
 speaker-test -c 2 -t wav -l 1 -D plughw:1,0
 ```
 
-## 3. Connect the INMP441 Microphone
+## 4. Connect the INMP441 Microphone
 
 ![GPIO INMP441 Pinout Diagram](images/GPIO-INMP441-Pinout-Diagram.png)
 
@@ -71,7 +78,7 @@ Play back the test sample.
 aplay -D plughw:1,0 test.wav
 ```
 
-## 4. Enable Acoustic Echo Cancellation (AEC)
+## 5. Enable Acoustic Echo Cancellation (AEC)
 
 Without Acoustic Echo Cancellation (AEC), speaker output may be picked up as microphone input, causing a feedback loop where the agent hears its own output and responds to itself. Raspberry Pi's sound server PulseAudio can be configured to use AEC to reduce echo from the speaker when using a microphone.
 

@@ -42,12 +42,16 @@ async def main():
     transport = LocalAudioTransport(
         params=LocalAudioTransportParams(
             audio_in_enabled=True,
+            audio_in_channels=1,
+            audio_in_sample_rate=16000,
             audio_out_enabled=True,
+            audio_out_channels=1,
+            audio_out_sample_rate=16000,
             # vad_analyzer=SileroVADAnalyzer(),
         )
     )
 
-    stt = GoogleSTTService(params=GoogleSTTService.InputParams(languages=[Language.JA]))
+    # stt = GoogleSTTService(params=GoogleSTTService.InputParams(languages=[Language.JA]))
 
     system_instruction = (
         "You are PALM-9000, a self-aware houseplant powered by an advanced AI. "
@@ -71,10 +75,10 @@ async def main():
         params=GeminiMultimodalLiveInputParams(language=Language.JA),
     )
 
-    tts = GoogleTTSService(
-        voice_id="ja-JP-Chirp3-HD-Charon",
-        params=GoogleTTSService.InputParams(language=Language.JA),
-    )
+    # tts = GoogleTTSService(
+    #     voice_id="ja-JP-Chirp3-HD-Charon",
+    #     params=GoogleTTSService.InputParams(language=Language.JA),
+    # )
 
     context = GoogleLLMContext()
     context_aggregator = llm.create_context_aggregator(context)
