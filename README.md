@@ -89,15 +89,14 @@ pactl list short sinks    # E.g., alsa_output.usb-GeneralPlus_USB_Audio_Device-0
 
 Edit the PulseAudio configuration file (`/etc/pulse/default.pa`) to load the echo cancel module on startup. Specify the correct source_master and sink_master based on the previous step.
 ```sh
-load-module module-echo-cancel source_name=echosource sink_name=echosink source_master=alsa_input.platform-soc_sound.stereo-fallback sink_master=alsa_output.usb-GeneralPlus_USB_Audio_Device-00.analog-stereo aec_method=webrtc
+load-module module-echo-cancel source_name=echosource sink_name=echosink source_master=alsa_input.platform-soc_sound.stereo-fallback sink_master=alsa_output.usb-GeneralPlus_USB_Audio_Device-00.analog-stereo aec_method=webrtc aec_args="analog_gain_control=0 digital_gain_control=1"
 set-default-source echosource
 set-default-sink echosink
 ```
 
-Restart PulseAudio to apply the changes. (Note: `pulseaudio --start` resulted in errors for me, so I used `systemctl` instead.)
+Restart PulseAudio to apply the changes.
 ```sh
-pulseaudio -k
-systemctl --user start pulseaudio
+systemctl --user restart pulseaudio
 ```
 
 Confirm it's working. You should see "echosink" and "echosource" as the default sink and source.
@@ -116,16 +115,16 @@ wget https://download.samplelib.com/wav/sample-3s.wav
 Record from the AEC source via Pulse. While you're recording, play the sample audio file in a separate terminal and also speak into the microphone. Confirm card/device numbers in previous steps otherwise this may not work. Note that the `-f cd` option is shorthand for recording 16 bit little endian, 44100 Hz, stereo quality.
 ```sh
 # 1. Start recording
-PULSE_SOURCE=echosource arecord -D plughw:0,0 -D pulse -f cd -d 10 test.wav
+arecord -D pulse -f cd -d 10 test.wav
 # 2. Say: "1, 2, 3"
-# 3. Play test audio through speakers
-aplay -D plughw:1,0 sample-3s.wav
+# 3. In another terminal window, play test audio through speakers
+aplay -D pulse sample-3s.wav
 # 4. Say: "4, 5, 6"
 ```
 
 Now play the recording.
 ```sh
-PULSE_SINK=echosink aplay -D pulse test.wav
+aplay -D pulse test.wav
 ```
 
 The recording should contain your voice (mic) but little to none of the sample audio being played from the speaker.
