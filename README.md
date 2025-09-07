@@ -5,6 +5,24 @@ PALM-9000 is a Raspberry Pi and LLM–powered talking palm tree—ever-watchful,
 
 ![Raspberry Pi Zero 2W GPIO Pinout](images/Raspberry-Pi-Zero-2W-GPIO-Pinout.png)
 
+## Enable SPI
+
+Edit `/boot/firmware/config.txt` and add (if not already):
+```sh
+dtparam=spi=on
+```
+
+Reboot.
+```sh
+sudo reboot
+```
+
+Verify that the device exists.
+```sh
+# You should see something like /dev/spidev0.0 and /dev/spidev0.1
+ls /dev/spi*
+```
+
 ## Connect the OTG USB Cable and USB Audio Adapter
 
 ## Connect the INMP441 Microphone
