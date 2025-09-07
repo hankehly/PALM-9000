@@ -55,19 +55,20 @@ sudo reboot
 Confirm ALSA sees the mic.
 ```sh
 # You should see something like "Google voiceHAT SoundCard HiFi"
+# Mark the card number and device number for later use
 arecord -l
 ```
 
 Record a test sample
 ```sh
 # Replace 1 with the card number from the previous command
-arecord -D plughw:1,0 -f cd -c 1 -r 44100 -d 5 test.wav
+arecord -D plughw:0,0 -f cd -c 1 -r 44100 -d 5 test.wav
 ```
 
 Play back the test sample.
 ```sh
 # Replace the first 0 with the connected speaker device number
-aplay -D plughw:0,0 test.wav
+aplay -D plughw:1,0 test.wav
 ```
 
 ## Enable Acoustic Echo Cancellation (AEC)
