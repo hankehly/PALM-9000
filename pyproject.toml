@@ -10,7 +10,7 @@ dependencies = [
     "luma-led-matrix>=1.7.1",
     "pydantic>=2.11.7",
     "pydantic-settings>=2.10.1",
-    "pipecat-ai[google]>=0.0.84",
+    "pipecat-ai[google,local,silero]>=0.0.84",
     "spidev>=3.7 ; sys_platform == 'linux'",
 ]
 
