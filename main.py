@@ -35,7 +35,7 @@ async def main():
 
     @audio_buffer.event_handler("on_audio_data")
     async def on_audio_data(buffer, audio: bytes, sample_rate: int, num_channels: int):
-        # heart.process_audio(audio)
+        heart.process_audio(audio)
         logger.info(f"Received audio data: {len(audio)} bytes")
 
     audio_recording_control_processor = AudioRecordingControlProcessor(audio_buffer)
