@@ -5,6 +5,8 @@ PALM-9000 is a Raspberry Pi and LLM–powered talking palm tree—ever-watchful,
 
 ![Raspberry Pi Zero 2W GPIO Pinout](images/Raspberry-Pi-Zero-2W-GPIO-Pinout.png)
 
+## Connect the OTG USB Cable and USB Audio Adapter
+
 ## Connect the INMP441 Microphone
 
 ![GPIO INMP441 Pinout Diagram](images/GPIO-INMP441-Pinout-Diagram.png)
@@ -36,56 +38,6 @@ Play back the test sample.
 ```sh
 # Replace the first 0 with the connected speaker device number
 aplay -D plughw:0,0 test.wav
-```
-
-## Enable WM8960 HAT Interfaces & Driver
-
-Edit `/boot/firmware/config.txt` (add these if not present):
-```sh
-dtparam=i2s=on
-dtparam=i2c_arm=on
-dtoverlay=wm8960-soundcard
-```
-
-Also edit /etc/modules and add (if not already):
-```sh
-i2c-dev
-```
-
-Reboot.
-```sh
-sudo reboot
-```
-
-Confirm HAT is detected.
-```sh
-# I2C control plane (WM8960 is usually at 0x1a)
-sudo apt-get update -y && sudo apt-get install -y i2c-tools alsa-utils
-sudo i2cdetect -y 1
-
-# ALSA sees the sound card? (should see wm8960-soundcard)
-aplay -l
-```
-
-Unmute outputs & route PCM.
-```sh
-amixer -c 0 sset 'Headphone' 80% unmute
-amixer -c 0 sset 'Playback' 80% unmute
-amixer -c 0 sset 'Speaker' 80% unmute
-amixer -c 0 sset 'Speaker Playback ZC' on
-amixer -c 0 sset 'Mono Out' 80% unmute
-amixer -c 0 sset 'Left Output Mixer PCM' on
-amixer -c 0 sset 'Right Output Mixer PCM' on
-```
-
-Plugin a speaker or headphones and play a quick test:
-```sh
-speaker-test -c 2 -t wav -l 1
-```
-
-Save your mixer state so it persists across reboots.
-```sh
-sudo alsactl store
 ```
 
 ## Enable Acoustic Echo Cancellation (AEC)
@@ -203,6 +155,56 @@ PULSE_SINK=echosink aplay -D pulse test.wav
 ```
 
 The recording should contain your voice (mic) but little to none of the sample audio being played from the speaker.
+
+## (Deprecated) Enable WM8960 HAT Interfaces & Driver
+
+Edit `/boot/firmware/config.txt` (add these if not present):
+```sh
+dtparam=i2s=on
+dtparam=i2c_arm=on
+dtoverlay=wm8960-soundcard
+```
+
+Also edit /etc/modules and add (if not already):
+```sh
+i2c-dev
+```
+
+Reboot.
+```sh
+sudo reboot
+```
+
+Confirm HAT is detected.
+```sh
+# I2C control plane (WM8960 is usually at 0x1a)
+sudo apt-get update -y && sudo apt-get install -y i2c-tools alsa-utils
+sudo i2cdetect -y 1
+
+# ALSA sees the sound card? (should see wm8960-soundcard)
+aplay -l
+```
+
+Unmute outputs & route PCM.
+```sh
+amixer -c 0 sset 'Headphone' 80% unmute
+amixer -c 0 sset 'Playback' 80% unmute
+amixer -c 0 sset 'Speaker' 80% unmute
+amixer -c 0 sset 'Speaker Playback ZC' on
+amixer -c 0 sset 'Mono Out' 80% unmute
+amixer -c 0 sset 'Left Output Mixer PCM' on
+amixer -c 0 sset 'Right Output Mixer PCM' on
+```
+
+Plugin a speaker or headphones and play a quick test:
+```sh
+speaker-test -c 2 -t wav -l 1
+```
+
+Save your mixer state so it persists across reboots.
+```sh
+sudo alsactl store
+```
 
 # Future Work
 
