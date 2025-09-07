@@ -96,7 +96,7 @@ pactl list short sinks    # E.g., alsa_output.usb-GeneralPlus_USB_Audio_Device-0
 
 Edit the PulseAudio configuration file (`/etc/pulse/default.pa`) to load the echo cancel module on startup. Specify the correct source_master and sink_master based on the previous step.
 ```sh
-load-module module-echo-cancel source_name=echosource sink_name=echosink source_master=alsa_input.platform-soc_sound.stereo-fallback sink_master=alsa_output.usb-GeneralPlus_USB_Audio_Device-00.analog-stereo aec_method=webrtc rate=16000 channels=1 aec_args="analog_gain_control=0 digital_gain_control=1"
+load-module module-echo-cancel source_name=echosource sink_name=echosink source_master=alsa_input.platform-soc_sound.stereo-fallback sink_master=alsa_output.usb-GeneralPlus_USB_Audio_Device-00.analog-stereo use_master_format=1 aec_method=webrtc aec_args="analog_gain_control=0 digital_gain_control=1 extended_filter=1 noise_suppression=1"
 set-default-source echosource
 set-default-sink echosink
 ```
