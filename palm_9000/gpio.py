@@ -13,6 +13,45 @@ class Max7219AmplitudeHeart:
     """
     Drive a heart icon on an 8x8 MAX7219, brightness = audio amplitude.
     Call `start()` once. Feed audio via `heart.process_audio(audio_bytes)`.
+
+    Sample Usage:
+
+        import asyncio
+        from palm_9000.gpio import Max7219AmplitudeHeart
+
+        async def main():
+            heart = Max7219AmplitudeHeart(fps=60, ema=0.4, gamma=2.0, channels=1)
+            await heart.start()
+
+            # In a real app you'll be pulling 16‑bit mono (or interleaved) PCM
+            # audio frames from a microphone / audio callback. Below we just
+            # simulate a few seconds of varying amplitude.
+            import math, struct, time
+            sample_rate = 16000
+            frame_ms = 40  # 40 ms frames
+            frame_samples = int(sample_rate * frame_ms / 1000)
+            t = 0.0
+            dt = frame_samples / sample_rate
+            try:
+                for _ in range(int(5 * 1000 / frame_ms)):  # ~5 seconds
+                    # Create a synthetic sine wave whose amplitude slowly pulses
+                    amp = 0.2 + 0.75 * (0.5 * (1 + math.sin(2 * math.pi * 0.6 * t)))
+                    freq = 440
+                    frame = [int(amp * 0.8 * 32767 * math.sin(2 * math.pi * freq * (t + i / sample_rate))) for i in range(frame_samples)]
+                    audio_bytes = struct.pack('<' + 'h'*len(frame), *frame)
+                    heart.process_audio(audio_bytes)
+                    await asyncio.sleep(frame_ms / 1000.0)
+                    t += dt
+            finally:
+                await heart.stop()
+
+        if __name__ == "__main__":
+            asyncio.run(main())
+
+    Notes:
+    - `process_audio` is thread-safe; you can call it from an audio callback thread.
+    - Audio must be 16-bit little-endian PCM. For multi-channel audio set `channels`.
+    - Brightness curve is smoothed (EMA) and gamma-corrected for perceptual response.
     """
 
     def __init__(
