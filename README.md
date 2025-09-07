@@ -25,6 +25,18 @@ ls /dev/spi*
 
 ## Connect the OTG USB Cable and USB Audio Adapter
 
+Hook a USB OTG cable to the Pi Zero's USB port, then connect a USB audio adapter to the OTG cable. For this project, I used a [UGREEN 10396](https://www.amazon.co.jp/dp/B00LN3LQKQ) and [ALLVD B0CC519BSM](https://www.amazon.co.jp/dp/B0CC519BSM).
+
+Find the card/device numbers for the speaker.
+```sh
+aplay -l
+```
+
+Do a quick test to confirm sound output. The `-D plughw:1,0` option specifies card 1, device 0; replace with your connected device numbers.
+```sh
+speaker-test -c 2 -t wav -l 1 -D plughw:1,0
+```
+
 ## Connect the INMP441 Microphone
 
 ![GPIO INMP441 Pinout Diagram](images/GPIO-INMP441-Pinout-Diagram.png)
