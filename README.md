@@ -1,7 +1,7 @@
 # PALM-9000
 PALM-9000 is a Raspberry Pi and LLM–powered talking palm tree—ever-watchful, eerily articulate, and not entirely sure it should let you prune that branch.
 
-# Raspberry Pi Configuration
+# Raspberry Pi Setup
 
 ![Raspberry Pi Zero 2W GPIO Pinout](images/Raspberry-Pi-Zero-2W-GPIO-Pinout.png)
 
@@ -184,6 +184,12 @@ speaker-test -c 2 -t wav -l 1
 Save your mixer state so it persists across reboots.
 ```sh
 sudo alsactl store
+```
+
+# Run
+
+```sh
+PULSE_LATENCY_MSEC=60 uv run --no-dev main.py
 ```
 
 # Future Work

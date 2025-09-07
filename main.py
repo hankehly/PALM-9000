@@ -8,6 +8,8 @@ from pipecat.pipeline.task import PipelineTask
 from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
 from pipecat.services.gemini_multimodal_live.gemini import (
     GeminiMultimodalLiveLLMService,
+)
+from pipecat.services.gemini_multimodal_live.gemini import (
     InputParams as GeminiMultimodalLiveInputParams,
 )
 from pipecat.services.google.llm import GoogleLLMContext, GoogleLLMService
@@ -19,8 +21,8 @@ from pipecat.transports.local.audio import (
     LocalAudioTransportParams,
 )
 
-# from palm_9000.gpio import Max7219AmplitudeHeart
-# from palm_9000.processors import AudioRecordingControlProcessor
+from palm_9000.gpio import Max7219AmplitudeHeart
+from palm_9000.processors import AudioRecordingControlProcessor
 from palm_9000.settings import settings
 
 
@@ -28,15 +30,15 @@ async def main():
     # Initialize audio processing components
     audio_buffer = AudioBufferProcessor(buffer_size=512)
 
-    # heart = Max7219AmplitudeHeart(min_brightness=0)
-    # await heart.start()
+    heart = Max7219AmplitudeHeart(min_brightness=0)
+    await heart.start()
 
     @audio_buffer.event_handler("on_audio_data")
     async def on_audio_data(buffer, audio: bytes, sample_rate: int, num_channels: int):
         # heart.process_audio(audio)
         logger.info(f"Received audio data: {len(audio)} bytes")
 
-    # audio_recording_control_processor = AudioRecordingControlProcessor(audio_buffer)
+    audio_recording_control_processor = AudioRecordingControlProcessor(audio_buffer)
 
     # Initialize pipeline
     transport = LocalAudioTransport(
@@ -83,7 +85,7 @@ async def main():
     # )
 
     context = GoogleLLMContext()
-    context_aggregator = llm.create_context_aggregator(context)
+    # context_aggregator = llm.create_context_aggregator(context)
 
     pipeline = Pipeline(
         [
@@ -93,8 +95,8 @@ async def main():
             llm,
             # tts,
             transport.output(),
-            # audio_recording_control_processor,
-            # audio_buffer,
+            audio_recording_control_processor,
+            audio_buffer,
             # context_aggregator.assistant(),
         ]
     )
@@ -116,7 +118,7 @@ async def main():
         logger.error(f"Pipeline error: {e}")
     finally:
         logger.info("Shutting down...")
-        # await heart.stop()
+        await heart.stop()
 
 
 if __name__ == "__main__":
