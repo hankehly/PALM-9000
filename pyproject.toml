@@ -11,6 +11,7 @@ dependencies = [
     "pydantic>=2.11.7",
     "pydantic-settings>=2.10.1",
     "pipecat-ai[google]>=0.0.84",
+    "spidev>=3.7 ; sys_platform == 'linux'",
 ]
 
 [dependency-groups]
@@ -47,6 +48,5 @@ dev = [
     "llama-index-tools-google>=0.6.0",
     "gpiozero>=2.0.1",
     "pigpio>=1.78",
-    "spidev>=3.7 ; sys_platform == 'linux'",
     "rpi-gpio>=0.7.1 ; sys_platform == 'linux'",
 ]

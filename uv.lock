@@ -3304,6 +3304,7 @@ dependencies = [
     { name = "pipecat-ai", extra = ["google"] },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "spidev", marker = "sys_platform == 'linux'" },
 ]
 
 [package.dev-dependencies]
@@ -3336,7 +3337,6 @@ dev = [
     { name = "rpi-gpio", marker = "sys_platform == 'linux'" },
     { name = "scipy" },
     { name = "sounddevice" },
-    { name = "spidev", marker = "sys_platform == 'linux'" },
     { name = "torch" },
     { name = "transformers" },
     { name = "uvicorn" },
@@ -3351,6 +3351,7 @@ requires-dist = [
     { name = "pipecat-ai", extras = ["google"], specifier = ">=0.0.84" },
     { name = "pydantic", specifier = ">=2.11.7" },
     { name = "pydantic-settings", specifier = ">=2.10.1" },
+    { name = "spidev", marker = "sys_platform == 'linux'", specifier = ">=3.7" },
 ]
 
 [package.metadata.requires-dev]
@@ -3383,7 +3384,6 @@ dev = [
     { name = "rpi-gpio", marker = "sys_platform == 'linux'", specifier = ">=0.7.1" },
     { name = "scipy", specifier = ">=1.16.0" },
     { name = "sounddevice", specifier = ">=0.5.2" },
-    { name = "spidev", marker = "sys_platform == 'linux'", specifier = ">=3.7" },
     { name = "torch", specifier = ">=2.7.1" },
     { name = "transformers", specifier = ">=4.53.0" },
     { name = "uvicorn", specifier = ">=0.35.0" },
