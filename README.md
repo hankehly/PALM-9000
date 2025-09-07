@@ -5,7 +5,7 @@ PALM-9000 is a Raspberry Pi and LLM–powered talking palm tree—ever-watchful,
 
 ![Raspberry Pi Zero 2W GPIO Pinout](images/Raspberry-Pi-Zero-2W-GPIO-Pinout.png)
 
-## Enable SPI
+## 1. Enable SPI
 
 Edit `/boot/firmware/config.txt` and add (if not already):
 ```sh
@@ -23,7 +23,7 @@ Verify that the device exists.
 ls /dev/spi*
 ```
 
-## Connect the OTG USB Cable and USB Audio Adapter
+## 2. Connect the OTG USB Cable and USB Audio Adapter
 
 Hook a USB OTG cable to the Pi Zero's USB port, then connect a USB audio adapter to the OTG cable. For this project, I used a [UGREEN 10396](https://www.amazon.co.jp/dp/B00LN3LQKQ) and [ALLVD B0CC519BSM](https://www.amazon.co.jp/dp/B0CC519BSM).
 
@@ -37,7 +37,7 @@ Do a quick test to confirm sound output. The `-D plughw:1,0` option specifies ca
 speaker-test -c 2 -t wav -l 1 -D plughw:1,0
 ```
 
-## Connect the INMP441 Microphone
+## 3. Connect the INMP441 Microphone
 
 ![GPIO INMP441 Pinout Diagram](images/GPIO-INMP441-Pinout-Diagram.png)
 
@@ -71,93 +71,40 @@ Play back the test sample.
 aplay -D plughw:1,0 test.wav
 ```
 
-## Enable Acoustic Echo Cancellation (AEC)
+## 4. Enable Acoustic Echo Cancellation (AEC)
 
-Without Acoustic Echo Cancellation (AEC), speaker output may be picked up as microphone input, causing a feedback loop where the agent hears its own output and responds to itself.
+Without Acoustic Echo Cancellation (AEC), speaker output may be picked up as microphone input, causing a feedback loop where the agent hears its own output and responds to itself. Raspberry Pi's sound server PulseAudio can be configured to use AEC to reduce echo from the speaker when using a microphone.
 
-Raspberry PI's sound server PulseAudio can be configured to use Acoustic Echo Cancellation (AEC) to reduce echo from the speaker when using a microphone. The following setup assumes you are connecting to a headless 64-bit Raspberry Pi from macOS.
-
-On macOS, install an X server (e.g., XQuartz).
-```sh
-brew install --cask xquartz
-```
-
-After installing, log out and log back in (or reboot) so `$DISPLAY` is set correctly on macOS.
-```sh
-echo $DISPLAY
-```
-
-You should see something like this:
-```sh
-/private/tmp/com.apple.launchd.N7l0ZjE86u/org.xquartz:0
-```
-
-Login to the raspberry pi with X11 forwarding enabled. This will allow you to see the GUI from your Raspberry Pi on your macOS.
-```sh
-ssh -Y <username>@<raspberry_pi_ip>
-```
-
-Now inside the Raspberry Pi, install PulseAudio and its utilities. PulseAudio is probably already installed on the Raspberry Pi, but you may need to install pavucontrol.
+Install PulseAudio and its utilities.
 ```sh
 sudo apt update
-sudo apt install pulseaudio pulseaudio-utils pavucontrol
+sudo apt install pulseaudio pulseaudio-utils
 ```
 
-Manually enable AEC.
+Now we need to identify the device names for the mic and speaker so that we can configure PulseAudio to use them for AEC; otherwise, PulseAudio might default to the wrong devices. Run the following commands to list the available sources (microphones) and sinks (speakers).
 ```sh
-pactl load-module module-echo-cancel \
-    source_name=echosource sink_name=echosink \
-    aec_method=webrtc
+pactl list short sources  # E.g., alsa_input.platform-soc_sound.stereo-fallback
+pactl list short sinks    # E.g., alsa_output.usb-GeneralPlus_USB_Audio_Device-00.analog-stereo
 ```
 
-Make sure the AEC devices exist. You should see something like `echosource` and `echosink`.
+Edit the PulseAudio configuration file (`/etc/pulse/default.pa`) to load the echo cancel module on startup. Specify the correct source_master and sink_master based on the previous step.
 ```sh
-pactl list short sources
-pactl list short sinks
-```
-
-Run pavucontrol on the Raspberry Pi.
-```sh
-pavucontrol
-```
-
-You should see a window like this appear on your macOS. Go to the Output Devices and Input Devices tabs and click the green icon next to the option showing "echo cancelled" in the title.
-
-![Pavucontrol](images/pavucontrol.png)
-
-Now go back to the Raspberry Pi and confirm it's working.
-```sh
-pactl info | grep "Default Sink"
-pactl info | grep "Default Source"
-```
-
-You should see:
-```sh
-Default Sink: echosink
-Default Source: echosource
-```
-
-### Set as default (optional)
-
-To set AEC as the default, edit the PulseAudio configuration file.
-```sh
-sudo vi /etc/pulse/default.pa
-```
-
-Add at the end:
-```sh
-load-module module-echo-cancel source_name=echosource sink_name=echosink aec_method=webrtc
+load-module module-echo-cancel source_name=echosource sink_name=echosink source_master=alsa_input.platform-soc_sound.stereo-fallback sink_master=alsa_output.usb-GeneralPlus_USB_Audio_Device-00.analog-stereo aec_method=webrtc
 set-default-source echosource
 set-default-sink echosink
 ```
 
-Save, then restart PulseAudio:
+Restart PulseAudio to apply the changes. (Note: `pulseaudio --start` resulted in errors for me, so I used `systemctl` instead.)
 ```sh
 pulseaudio -k
-pulseaudio --start
+systemctl --user start pulseaudio
 ```
 
-### Test
+Confirm it's working. You should see "echosink" and "echosource" as the default sink and source.
+```sh
+pactl info | grep "Default Sink"
+pactl info | grep "Default Source"
+```
 
 To test that AEC is working, we'll record our voice while playing audio through the speaker. If AEC is working correctly, we should only hear our voice in the recording, while the audio from the speaker is removed.
 
@@ -166,18 +113,14 @@ First, prepare a sample audio file to play through the speaker.
 wget https://download.samplelib.com/wav/sample-3s.wav
 ```
 
-Record from the AEC source via Pulse. (Note that the `-f cd` option is shorthand for recording 16 bit little endian, 44100 Hz, stereo quality.)
+Record from the AEC source via Pulse. While you're recording, play the sample audio file in a separate terminal and also speak into the microphone. Confirm card/device numbers in previous steps otherwise this may not work. Note that the `-f cd` option is shorthand for recording 16 bit little endian, 44100 Hz, stereo quality.
 ```sh
-PULSE_SOURCE=echosource arecord -D pulse -f cd -d 10 test.wav
-```
-
-While you're recording, play the sample audio file in a separate terminal and also speak into the microphone.
-```sh
-# Flow:
-#  1. Say: "Test 1, 2, 3"
-#  2. Play test audio
-aplay sample-3s.wav
-#  3. Say: "Test 4, 5, 6"
+# 1. Start recording
+PULSE_SOURCE=echosource arecord -D plughw:0,0 -D pulse -f cd -d 10 test.wav
+# 2. Say: "1, 2, 3"
+# 3. Play test audio through speakers
+aplay -D plughw:1,0 sample-3s.wav
+# 4. Say: "4, 5, 6"
 ```
 
 Now play the recording.
