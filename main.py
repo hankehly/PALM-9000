@@ -46,7 +46,9 @@ async def main():
             audio_in_sample_rate=16000,
             audio_out_enabled=True,
             audio_out_channels=1,
-            audio_out_sample_rate=16000,
+            audio_out_sample_rate=24000,
+            # 8 (≈80 ms buffer; try 6 for lower latency or 10–12 if underruns persist)
+            audio_out_10ms_chunks=8,
             # vad_analyzer=SileroVADAnalyzer(),
         )
     )
