@@ -6,11 +6,11 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "loguru>=0.7.3",
-    "pipecat-ai[google,whisper]>=0.0.80",
     "numpy>=2.2.6",
     "luma-led-matrix>=1.7.1",
     "pydantic>=2.11.7",
     "pydantic-settings>=2.10.1",
+    "pipecat-ai[google]>=0.0.84",
 ]
 
 [dependency-groups]
