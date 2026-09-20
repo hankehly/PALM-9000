@@ -103,5 +103,5 @@ class WakeWordGate(FrameProcessor):
         logger.info(
             f"No speech for {self._silence_timeout_secs}s - going back to sleep"
         )
-        self._awake = False
         self._llm.set_audio_input_paused(True)
+        self._awake = False

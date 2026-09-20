@@ -220,6 +220,30 @@ class TestWakeWordGate:
         assert gate._awake is False
         assert gate._deadline == 0.0
 
+    async def test_a_failing_pause_keeps_the_gate_awake_to_retry(self, clock):
+        """Mirror of the unpause case, and the more dangerous direction.
+
+        If the pause fails, audio is still flowing to Google. Staying awake
+        means the next frame retries it; flipping to asleep would leave the
+        microphone open while the gate believed it was gating.
+        """
+
+        class ExplodingLLM(FakeLLM):
+            def set_audio_input_paused(self, paused):
+                super().set_audio_input_paused(paused)
+                if paused:
+                    raise RuntimeError("websocket is gone")
+
+        detector = FakeDetector([0.9])
+        gate = make_gate(detector, ExplodingLLM(), clock)
+        await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+
+        clock.advance(31.0)
+        with pytest.raises(RuntimeError):
+            await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+
+        assert gate._awake is True, "must stay awake so the pause is retried"
+
     @pytest.mark.parametrize(
         "frame",
         [
