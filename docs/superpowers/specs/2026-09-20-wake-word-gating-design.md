@@ -11,117 +11,112 @@ about what that entails:
 > With server-side VAD enabled we stream continuously, since Gemini's VAD
 > needs the uninterrupted stream to detect turns.
 
-So whenever the app is running, it is uploading microphone audio to Google
+So whenever the app is running, it uploads microphone audio to Google
 continuously — not only when someone speaks to it. Today a 10-minute idle
-timeout caps that, but only until the process is restarted.
+timeout caps that, but only until the process restarts.
 
-That is the blocker for running PALM-9000 as an always-on appliance. A live
-microphone streaming to a cloud API around the clock is a cost and a privacy
-posture that should be chosen deliberately, not inherited from a systemd
-restart policy.
+That is the blocker for running PALM-9000 as an always-on appliance.
+
+The cost is not only privacy. Live API audio input is billed per token, quoted
+at roughly $0.005/min, so streaming continuously runs about $0.30/hour — on
+the order of **$216/month to listen to an empty room**. (Rates change; check
+current pricing before relying on the figure.)
 
 **Goal:** no microphone audio leaves the Pi until a wake word is detected
 locally, and audio stops flowing again shortly after the conversation ends.
 
-The cost is not only privacy. Live API audio input is billed per token, quoted
-at roughly $0.005/min. Streaming continuously is therefore about $0.30/hour —
-on the order of **$216/month to listen to an empty room**. Gating reduces that
-to the minutes actually spent in conversation. (Rates change; check current
-pricing before relying on the figure.)
-
 ## Decisions
 
-Each was settled against measurements or library constraints, not preference.
+Each was settled against a measurement or a library constraint.
 
 ### Gate by pausing, not disconnecting
 
 `GeminiLiveLLMService` is constructed with `start_audio_paused=True` and woken
 with `set_audio_input_paused(False)`. `_send_user_audio` returns early while
-paused, so no audio is transmitted.
+paused, so nothing is transmitted.
 
-The alternative — disconnecting from Gemini entirely while asleep — was
-measured on the Pi:
+Measured on the Pi:
 
 | Design | Wake-to-ready |
 | --- | --- |
 | Pause/unpause (chosen) | 0.011 ms (synchronous flag) |
-| Rebuild pipeline per wake | 1.81s / 2.13s steady state, 6.42s first run |
+| Rebuild pipeline per wake | 1.81s / 2.13s steady, 6.42s first run |
 
-Two seconds of deafness after the wake word would lose the first utterance,
-since people speak immediately after saying it. Recovering that would require
-buffering and replaying audio across the connect.
+Two seconds of deafness would lose the first utterance, since people speak
+immediately after the wake word. `_connect`/`_disconnect` are also private in
+pipecat, so a disconnect design would depend on internals — the same coupling
+that caused the silent-audio-drop bug.
 
-`_connect` and `_disconnect` are also private in pipecat, so a
-disconnect-based design would either depend on internals — the same coupling
-that caused the silent-audio-drop bug — or rebuild the pipeline per wake.
+**Holding the session open costs nothing.** The service has no keepalive, ping
+or heartbeat path; its only senders are `_send_user_audio` (returns early while
+paused), `_send_user_text` and `_send_user_video`, and the latter two are never
+called here. The Live API bills per token with no charge for connection
+duration. The open socket is a privacy consideration, not a financial one.
 
-**Accepted trade-off:** a websocket to Google stays open while asleep. No
-audio crosses it. Gemini Live sessions have server-side duration limits, so
-pipecat will reconnect periodically on its own.
+### Engine: livekit-wakeword
 
-Holding that session open costs nothing. The service has no keepalive, ping or
-heartbeat path — its only senders are `_send_user_audio` (which returns early
-while paused), `_send_user_text` and `_send_user_video`, and the latter two are
-never called here. The Live API is billed per token, with no charge for
-connection duration or idle sessions. The open socket is therefore a privacy
-consideration, not a financial one.
+Chosen after ruling out the alternatives:
 
-### openWakeWord models, run directly on onnxruntime
+| Engine | Verdict |
+| --- | --- |
+| **livekit-wakeword** | **Chosen.** Keyless, ONNX, trains custom multilingual models. |
+| Porcupine | Out — now requires a company email; the project's account is gone. |
+| openWakeWord (package) | Out — declares `tflite-runtime`, which has no `cp312` aarch64 wheel. |
+| Rhasspy Raven | Out — archived Nov 2023, pins `scipy==1.6.0`. |
+| Vosk | Out — small models want ~300 MB runtime; the Pi has ~260 MB free. |
 
-The `openwakeword` package cannot be installed on the Pi: it declares
-`tflite-runtime` as a hard Linux dependency, and `tflite-runtime` has no
-`cp312` aarch64 wheel (latest 2.14.0 tops out at `cp311`). The Pi runs Python
-3.12. It would also pull `scikit-learn` and `scipy` into production, neither
-of which is there today, on a device with roughly 260 MB of free RAM.
+Verified empirically rather than assumed:
 
-Its models are plain ONNX, and `onnxruntime` is **already installed and
-loading on the Pi** via `pipecat[silero]`. So we run the models directly and
-add no dependencies at all.
+- **It adds exactly one package to production.** `uv pip install --dry-run`
+  against a real `--no-dev` environment reports `Would install 1 package:
+  livekit-wakeword`. Its only declared deps are `numpy` and `onnxruntime`,
+  both already present via `pipecat[silero]`.
+- **It loads openWakeWord's pretrained models.** `WakeWordModel(models=
+  ["hey_jarvis_v0.1.onnx"])` loads and `predict()` returns
+  `{'hey_jarvis_v0.1': 0.0}` on silence.
+- **The wheel bundles the feature extractors** (`melspectrogram.onnx`,
+  `embedding_model.onnx`), so there is no download at runtime and no network
+  dependency on the Pi or in CI.
 
-The inference chain is audio → melspectrogram → embedding → classifier, each
-shipped as a separate `.onnx` at the v0.5.1 release. All six are confirmed
-downloadable; a complete chain is ~3.5 MB.
+Input is 16 kHz int16 — exactly what the transport already produces.
 
-### English wake word, for now
+### English wake word now, Japanese later
 
-All openWakeWord pretrained models are English phrases. `hey_jarvis` is the
-choice; `alexa` was rejected to avoid triggering on real devices.
+Ship with openWakeWord's pretrained `hey_jarvis_v0.1.onnx`. `alexa` was
+rejected to avoid triggering real devices.
 
-A Japanese wake word was investigated and is **not achievable on this
-engine**: openWakeWord's training extra pins `tensorflow-cpu==2.8.1` (no
-Python 3.12 wheels) and uses `deep-phonemizer`, which is English-oriented.
+The intended wake word is 「へい やっし」 — *hey yashi*, ヤシ being Japanese for
+palm tree. livekit-wakeword can train it: set `tts_backend: voxcpm` and
+`target_phrases`, then train off-device and drop the resulting `.onnx` in.
+Because that is the same file slot and the same runtime call, it is a
+configuration change, not a rewrite.
 
-Porcupine *can* do it — it ships `porcupine_params_ja.pv`, and Picovoice
-Console generates a custom `.ppn` from a typed Japanese phrase with no
-training. The repo's empty `PORCUPINE_KEYWORD_PATH` and
-`PORCUPINE_MODEL_PATH` settings suggest the original author intended exactly
-that. It was rejected here only because it requires a Picovoice account, and
-keylessness was preferred.
+Deferred rather than done now because the project documents that
+*"multilingual models currently achieve lower accuracy than English models"* —
+the frozen speech embedding is English-dominant and VoxCPM produces less
+diverse synthetic speech than Piper. Training time and hardware are
+unspecified upstream. Gating is worth having before that is worked out.
 
-**Consequence to accept:** you say an English phrase, then speak Japanese.
-If that grates, switching to Porcupine is the remedy, and the detector
-interface below keeps that a new class rather than a rewrite.
+**Consequence to accept meanwhile:** you say an English phrase, then speak
+Japanese.
 
 ### Silence timeout for re-arming
 
 After a wake, the gate re-arms once there has been no user speech and no bot
-speech for `wake_silence_timeout_secs` (default 30). Conversation continues as
-long as someone is talking; a single wake cannot leave the microphone open
-indefinitely.
+speech for `wake_silence_timeout_secs` (default 30). A single wake cannot
+leave the microphone open indefinitely.
 
 ### Activity signal: Silero VAD via the aggregator
 
-The obvious signal — `UserStartedSpeakingFrame` — is not emitted by
-`GeminiLiveLLMService`. That is the warning the app has printed since the
-pipecat 1.x migration:
+`GeminiLiveLLMService` does not emit `UserStartedSpeakingFrame` — that is the
+warning the app has printed since the pipecat 1.x migration:
 
 > GeminiLiveLLMService#0 is not emitting turn frames … You can enable local
 > VAD/turn detection by setting a vad_analyzer in LLMUserAggregatorParams.
 
-`vad_analyzer` is a field on `LLMUserAggregatorParams` (it is **not** on
+`vad_analyzer` is a field on `LLMUserAggregatorParams`. It is **not** on
 `TransportParams` in 1.x, so the commented-out `vad_analyzer=` line in
-`main.py` is stale and should be removed). Setting it produces local user turn
-frames independent of whether Gemini reports turns:
+`main.py` is stale and should be deleted.
 
 ```python
 LLMContextAggregatorPair(
@@ -130,12 +125,12 @@ LLMContextAggregatorPair(
 )
 ```
 
-Silero ships with `pipecat[silero]`, so this adds no dependency, and it also
-silences the long-standing startup warning.
+Silero ships with `pipecat[silero]`, so this adds nothing, and it silences the
+long-standing startup warning.
 
-An earlier draft proposed computing RMS locally instead. That was rejected on
-review: it would have reinvented turn detection badly, resetting the timer on
-any background noise.
+An earlier draft proposed computing RMS locally. Rejected on review: it would
+have reinvented turn detection badly, resetting the timer on any background
+noise.
 
 ## Architecture
 
@@ -143,41 +138,37 @@ any background noise.
 
 ```python
 class WakeWordDetector(Protocol):
-    def process(self, audio: bytes) -> float: ...   # 0.0-1.0 score
+    def process(self, audio: bytes) -> float: ...   # 0.0-1.0
     def reset(self) -> None: ...
 ```
 
-`OpenWakeWordDetector` implements it. Holds three `onnxruntime` sessions and
-the rolling mel-frame and embedding buffers. No pipecat import, so it is
-testable as a pure function of audio in, score out.
+`LiveKitWakeWordDetector` wraps `livekit.wakeword.WakeWordModel`, converting
+`bytes` to the `int16` array it expects and reducing the returned score dict to
+a single float. No pipecat import, so it is testable as audio in, score out.
 
-The `Protocol` exists so a `PorcupineDetector` can be added later without
-touching the gate.
+The `Protocol` keeps the gate independent of the engine.
 
 ### `palm_9000/processors.py` — `WakeWordGate`
 
-A `FrameProcessor` holding a detector, the LLM service, and the timeout. It
-forwards every frame unchanged; its only side effect is pausing and unpausing
-the service.
+A `FrameProcessor` holding a detector, the LLM service and the timeout. It
+forwards every frame unchanged; its only side effect is pausing and unpausing.
 
 ```
 transport.input() -> WakeWordGate -> context_aggregator.user() -> llm -> ...
 ```
-
-State machine:
 
 ```
 ASLEEP  --(score > threshold)-------------------> AWAKE
 AWAKE   --(no speech for silence_timeout_secs)--> ASLEEP
 ```
 
-- **ASLEEP:** feed `InputAudioRawFrame` audio to the detector. On a score above
+- **ASLEEP:** feed `InputAudioRawFrame` audio to the detector. Above
   threshold, call `set_audio_input_paused(False)`, reset the detector, log at
   INFO.
-- **AWAKE:** do not run detection. Reset the silence deadline on
+- **AWAKE:** skip detection. Reset the silence deadline on
   `UserStartedSpeakingFrame`, `UserStoppedSpeakingFrame`,
-  `BotStartedSpeakingFrame` and `BotStoppedSpeakingFrame`. When the deadline
-  passes, call `set_audio_input_paused(True)`.
+  `BotStartedSpeakingFrame`, `BotStoppedSpeakingFrame`. On expiry, call
+  `set_audio_input_paused(True)`.
 
 Starting asleep is structural: the service is built with
 `start_audio_paused=True`, so audio cannot reach Google before a wake even if
@@ -188,28 +179,17 @@ the gate fails to run.
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `wake_word_enabled` | `False` | Master switch; off changes nothing |
-| `wake_word_model` | `hey_jarvis_v0.1` | Classifier model name |
+| `wake_word_model_path` | `models/wakeword/hey_jarvis_v0.1.onnx` | Classifier |
 | `wake_word_threshold` | `0.5` | Score above which to wake |
 | `wake_silence_timeout_secs` | `30.0` | Re-arm after this much quiet |
-| `wake_word_model_dir` | `models/wakeword` | Where the `.onnx` files live |
 
-Defaulting `wake_word_enabled` to `False` means merging this changes no
-runtime behaviour until it is switched on.
+### Model file
 
-### Model files
+One file, `models/wakeword/hey_jarvis_v0.1.onnx` (1.27 MB), committed. The
+feature extractors come from the wheel, so nothing else ships and nothing is
+fetched at runtime.
 
-The three `.onnx` files are committed under `models/wakeword/`, ~3.5 MB total.
-Committing keeps deploys self-contained — the Pi pulls and runs, with no fetch
-step — and lets CI exercise the detector against real models.
-
-Two `.gitignore` rules currently exclude them, and `models/*` is the one that
-actually matches first:
-
-```
-$ git check-ignore -v models/wakeword/melspectrogram.onnx
-.gitignore:29:models/*   models/wakeword/melspectrogram.onnx
-```
-
+Two `.gitignore` rules currently exclude it, and `models/*` matches first.
 Because git will not re-include a file whose parent directory is excluded, the
 directory must be un-ignored before its contents:
 
@@ -220,57 +200,53 @@ models/*
 !models/wakeword/**
 ```
 
-`*.onnx` (line 25) also matches, so the `!models/wakeword/**` negation has to
-come after it. Verified with `git add --dry-run`, which reports the file as
-addable.
-
-Check it that way, **not** with `git check-ignore -v`: that command prints the
-matching rule even when the match is a negation, and still exits 0, so its
-output reads as "ignored" when the file is in fact includable. It misled the
+Verify with `git add --dry-run`, **not** `git check-ignore -v`: the latter
+prints the matching rule even when the match is a negation and still exits 0,
+so its output reads as "ignored" when the file is includable. It misled the
 author of this spec once already.
 
 ## Error handling
 
-- **Missing or unreadable models:** if `wake_word_enabled` is true and the
-  models cannot be loaded, fail at startup with a clear message. Do *not* fall
-  back to running ungated — that would silently restore continuous upload,
-  which is the behaviour this feature exists to prevent.
+- **Missing or unreadable model:** if enabled and the model cannot load, fail
+  at startup with a clear message. Do **not** fall back to ungated operation —
+  that would silently restore continuous upload, the exact behaviour this
+  feature removes.
 - **Detector raises mid-stream:** log via `logger.exception` and stay asleep.
   Failing closed keeps audio off the wire.
-- **Gate disabled:** `main.py` omits the processor entirely and constructs the
-  service without `start_audio_paused`, so the current behaviour is bit-for-bit
-  unchanged.
+- **Disabled:** `main.py` omits the processor and constructs the service
+  without `start_audio_paused`, leaving today's behaviour unchanged.
 
 ## Testing
 
-- `OpenWakeWordDetector` against a fake `onnxruntime` session, so no model
-  files are needed: buffer management, threshold behaviour, reset.
-- Detector against the **real committed models**: silence scores low; a
-  synthetic burst does not false-trigger. Keeps the ONNX wiring honest.
-- `WakeWordGate` like `AudioRecordingControlProcessor`: frames in, assertions
-  on `set_audio_input_paused` calls, on the silence deadline resetting for
-  each of the four activity frames, and on every frame being forwarded.
-- `main.py` wiring: the gate is present when enabled and absent when not, and
-  the service is constructed with `start_audio_paused=True` only when enabled.
+- `LiveKitWakeWordDetector` against a fake `WakeWordModel`: byte-to-array
+  conversion, score reduction, reset.
+- Detector against the **real committed model**: silence scores low, and a
+  synthetic burst does not false-trigger. Keeps the wiring honest.
+- `WakeWordGate` like `AudioRecordingControlProcessor`: assertions on
+  `set_audio_input_paused` calls, on the deadline resetting for each of the
+  four activity frames, and on every frame being forwarded.
+- `main.py` wiring: gate present only when enabled; `start_audio_paused=True`
+  only when enabled.
 - **Mutation checks** on each claim: removing the gate, defaulting
   `wake_word_enabled` to `True`, dropping `start_audio_paused`, and removing
   the silence re-arm must each turn the suite red.
 
 ## Risks
 
-- **Silero VAD CPU cost on a Pi Zero 2W is unmeasured.** It runs onnxruntime
-  inference per frame alongside the wake-word chain. Measure before wiring it
-  in; if it is too expensive, the fallback is Gemini's `TranscriptionFrame`
-  plus bot-speaking frames as the activity signal.
+- **Silero VAD CPU cost on a Pi Zero 2W is unmeasured.** It runs ONNX
+  inference per frame alongside the wake-word chain. Measure before wiring; if
+  too expensive, fall back to Gemini's `TranscriptionFrame` plus bot-speaking
+  frames as the activity signal.
 - **Wake-word CPU cost is likewise unmeasured** on that hardware.
-- **False accepts upload audio.** A false wake opens the microphone for up to
-  the silence timeout. Threshold tuning is empirical and wants real-device
-  testing.
-- **A resumed stream may confuse Gemini's server VAD**, since it sees a
-  discontinuity when audio starts mid-session.
+- **livekit-wakeword is young** (v0.2.1). Mitigated by its models being plain
+  ONNX and openWakeWord-compatible, so they outlive the library.
+- **False accepts upload audio** for up to the silence timeout. Threshold
+  tuning is empirical and wants real-device testing.
+- **A resumed stream may confuse Gemini's server VAD**, which sees a
+  discontinuity when audio restarts mid-session.
 
 ## Out of scope
 
 - The systemd unit and always-on operation. This is its prerequisite.
-- A custom Japanese wake word (see above).
-- Any change to the existing conversation behaviour once awake.
+- Training the Japanese 「へい やっし」 model (follow-up; same file slot).
+- Any change to conversation behaviour once awake.
