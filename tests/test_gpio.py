@@ -510,3 +510,44 @@ class TestRedrawIsNotRepeated:
         await heart.stop()
 
         assert heart.device.displays == 1
+
+
+class TestContextManager:
+    async def test_aenter_starts_and_aexit_stops(self, fake_hardware):
+        heart = Max7219AmplitudeHeart(fps=1000)
+        async with heart as entered:
+            assert entered is heart
+            assert heart._task is not None
+        assert heart._task is None
+
+    async def test_exit_runs_even_when_the_body_raises(self, fake_hardware):
+        heart = Max7219AmplitudeHeart(fps=1000)
+        with pytest.raises(RuntimeError):
+            async with heart:
+                raise RuntimeError("boom")
+        assert heart._task is None
+        assert heart.device.contrasts[-1] == 0
+
+
+class TestBlank:
+    def test_is_a_noop_when_no_device_was_opened(self, fake_hardware):
+        Max7219AmplitudeHeart()._blank()  # must not raise
+
+    def test_logs_instead_of_raising_when_the_bus_fails(
+        self, fake_hardware, monkeypatch
+    ):
+        heart = Max7219AmplitudeHeart()
+        heart._open_device()
+
+        def boom(_value):
+            raise OSError("SPI went away")
+
+        monkeypatch.setattr(heart.device, "contrast", boom)
+        heart._blank()  # swallowed, not raised
+
+    def test_turns_the_display_off(self, fake_hardware):
+        heart = Max7219AmplitudeHeart()
+        heart._open_device()
+        heart._blank()
+        assert heart.device.contrasts[-1] == 0
+        assert heart.device.cleared >= 1

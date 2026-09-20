@@ -72,6 +72,13 @@ class FakeHeart:
     async def stop(self):
         self.stopped += 1
 
+    async def __aenter__(self):
+        await self.start()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        await self.stop()
+
     def process_audio(self, audio):
         self.audio_chunks.append(audio)
 
@@ -196,7 +203,7 @@ class TestWorkerRegistrationRegression:
 
     async def test_source_awaits_add_workers(self):
         """A non-awaited call would leave a dangling coroutine and connect to nothing."""
-        source = inspect.getsource(main_module.main)
+        source = inspect.getsource(main_module._run_pipeline)
         assert "await runner.add_workers(" in source
 
 
@@ -341,3 +348,47 @@ def _audio_buffer() -> FakeAudioBuffer:
 
 def _worker() -> FakeWorker:
     return FakeWorker.instances[0]
+
+
+class TestHeartIsNeverLeft0n:
+    """Regression: a failure during startup used to leave the matrix lit.
+
+    heart.start() ran before the try/finally that stopped it, so anything
+    raising in between -- a bad API key, a retired model id, no network --
+    orphaned the render task with the display still on.
+    """
+
+    async def test_startup_failure_still_stops_the_heart(self, wired, monkeypatch):
+        def exploding_service(**kwargs):
+            raise RuntimeError("invalid api key")
+
+        monkeypatch.setattr(main_module, "GeminiLiveLLMService", exploding_service)
+
+        with pytest.raises(RuntimeError, match="invalid api key"):
+            await main_module.main()
+
+        heart = FakeHeart.instances[0]
+        assert heart.started == 1
+        assert heart.stopped == 1, "the display was left running after a failure"
+
+    async def test_transport_failure_still_stops_the_heart(self, wired, monkeypatch):
+        def exploding_transport(params):
+            raise OSError("no audio device")
+
+        monkeypatch.setattr(main_module, "LocalAudioTransport", exploding_transport)
+
+        with pytest.raises(OSError):
+            await main_module.main()
+
+        assert FakeHeart.instances[0].stopped == 1
+
+    async def test_heart_is_used_as_a_context_manager(self):
+        """The guarantee is structural, not a try/finally someone can move."""
+        source = inspect.getsource(main_module.main)
+        assert "async with" in source
+        assert "Max7219AmplitudeHeart" in source
+
+    async def test_normal_run_still_stops_the_heart(self, wired):
+        await main_module.main()
+        heart = FakeHeart.instances[0]
+        assert (heart.started, heart.stopped) == (1, 1)

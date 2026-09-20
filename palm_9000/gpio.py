@@ -3,6 +3,7 @@ import threading
 import time
 
 import numpy as np
+from loguru import logger
 from luma.core.interface.serial import noop, spi
 from luma.core.render import canvas
 from luma.led_matrix.device import max7219
@@ -119,14 +120,32 @@ class Max7219AmplitudeHeart:
                 pass
         finally:
             self._task = None
-            # turn off & clear
-            try:
-                if self.device is not None:
-                    self.device.contrast(0)
-                    if hasattr(self.device, "clear"):
-                        self.device.clear()
-            except Exception:
-                pass
+            self._blank()
+
+    async def __aenter__(self) -> "Max7219AmplitudeHeart":
+        """Start the display, guaranteeing stop() on the way out.
+
+        Using the context manager makes it structurally impossible to leave
+        the matrix lit when something later in startup fails.
+        """
+        await self.start()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        await self.stop()
+
+    def _blank(self) -> None:
+        """Turn the display off. Never raises: this runs during shutdown."""
+        if self.device is None:
+            return
+        try:
+            self.device.contrast(0)
+            if hasattr(self.device, "clear"):
+                self.device.clear()
+        except Exception as exc:
+            # Losing the bus while shutting down is not worth crashing over,
+            # but it should not vanish silently either.
+            logger.debug(f"Could not blank the display: {exc!r}")
 
     def process_audio(self, audio_bytes: bytes) -> None:
         """
@@ -240,9 +259,4 @@ class Max7219AmplitudeHeart:
         except asyncio.CancelledError:
             pass
         finally:
-            try:
-                self.device.contrast(0)
-                if hasattr(self.device, "clear"):
-                    self.device.clear()
-            except Exception:
-                pass
+            self._blank()

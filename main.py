@@ -24,6 +24,8 @@ from palm_9000.gpio import Max7219AmplitudeHeart
 from palm_9000.processors import AudioRecordingControlProcessor
 from palm_9000.settings import settings as app_settings
 
+IDLE_TIMEOUT_SECS = 10 * 60
+
 SYSTEM_INSTRUCTION = (
     "You are PALM-9000, a self-aware houseplant powered by an advanced AI. "
     "You speak in layman's terms with an eerie quality, "
@@ -34,11 +36,17 @@ SYSTEM_INSTRUCTION = (
 
 
 async def main():
+    # The heart is held open for the whole run. Everything that can fail --
+    # building the transport, reaching Gemini, starting the pipeline -- happens
+    # inside the `async with`, so the matrix is never left lit by a failure
+    # during startup.
+    async with Max7219AmplitudeHeart(min_brightness=0) as heart:
+        await _run_pipeline(heart)
+
+
+async def _run_pipeline(heart: Max7219AmplitudeHeart) -> None:
     # Initialize audio processing components
     audio_buffer = AudioBufferProcessor(buffer_size=512)
-
-    heart = Max7219AmplitudeHeart(min_brightness=0)
-    await heart.start()
 
     @audio_buffer.event_handler("on_audio_data")
     async def on_audio_data(buffer, audio: bytes, sample_rate: int, num_channels: int):
@@ -122,13 +130,15 @@ async def main():
 
     task = PipelineWorker(
         pipeline,
-        idle_timeout_secs=60 * 10,
+        idle_timeout_secs=IDLE_TIMEOUT_SECS,
         cancel_on_idle_timeout=True,
     )
 
     @task.event_handler("on_idle_timeout")
     async def on_idle_timeout(task):
-        logger.info("Session idle - running shutdown logic")
+        # cancel_on_idle_timeout=True means pipecat tears the pipeline down
+        # itself; this handler only records why the run ended.
+        logger.info(f"No activity for {IDLE_TIMEOUT_SECS}s - cancelling pipeline")
 
     # Opens the realtime input gate (see the context aggregator note above).
     await task.queue_frames([LLMRunFrame()])
@@ -137,11 +147,12 @@ async def main():
         runner = WorkerRunner()
         await runner.add_workers(task)
         await runner.run()
-    except Exception as e:
-        logger.error(f"Pipeline error: {e}")
+    except Exception:
+        # logger.exception keeps the traceback. A bare message here would
+        # hide where a pipeline failure actually came from.
+        logger.exception("Pipeline error")
     finally:
         logger.info("Shutting down...")
-        await heart.stop()
 
 
 if __name__ == "__main__":
