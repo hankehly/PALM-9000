@@ -350,7 +350,7 @@ def _worker() -> FakeWorker:
     return FakeWorker.instances[0]
 
 
-class TestHeartIsNeverLeft0n:
+class TestHeartIsNeverLeftOn:
     """Regression: a failure during startup used to leave the matrix lit.
 
     heart.start() ran before the try/finally that stopped it, so anything
