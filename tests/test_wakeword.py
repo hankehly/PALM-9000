@@ -82,3 +82,15 @@ class TestAgainstTheRealModel:
         detector = LiveKitWakeWordDetector(MODEL)
         detector.load()
         assert detector._model is not None
+
+    def test_the_committed_model_is_the_one_actually_loaded(self):
+        """A stub or a wrong model file cannot produce this key.
+
+        The other tests here only bound the score from above, so they would
+        pass against anything that returns 0.0. This one pins the identity of
+        the model that is actually running.
+        """
+        detector = LiveKitWakeWordDetector(MODEL)
+        detector.load()
+        scores = detector._model.predict(np.zeros(1280, dtype=np.int16))
+        assert "hey_livekit" in scores, scores
