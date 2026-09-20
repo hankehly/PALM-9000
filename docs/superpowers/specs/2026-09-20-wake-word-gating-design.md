@@ -179,6 +179,39 @@ a single float. No pipecat import, so it is testable as audio in, score out.
 
 The `Protocol` keeps the gate independent of the engine.
 
+> **Corrected during implementation — this section's omission shipped a bug
+> that made the whole feature inert.** The detector must hold a rolling
+> **2-second** buffer and score that window; it cannot pass a pipeline frame
+> straight through.
+>
+> `WakeWordModel.predict()` is **stateless**. It computes a mel spectrogram
+> over exactly the chunk it is given, slices 76-frame windows at stride 8,
+> and returns all-zeros below 16 embeddings — so it needs 76 + 15×8 = 196
+> mel frames, about 1.96 s, **in a single call**
+> (`livekit/wakeword/inference/model.py:96-145`).
+>
+> `LocalAudioTransport` pushes 20 ms frames — 320 samples at 16 kHz
+> (`pipecat/transports/local/audio.py:76`). Measured against the committed
+> model: 320 samples raises `InvalidArgument: Invalid input shape: {320}`;
+> 1.0 s and 1.5 s both return exactly `0.0`; only at ~2 s does a real score
+> (`0.0047` for silence) appear. Feeding 25 consecutive 1280-sample chunks
+> to one model instance still returns `0.0` — it does not accumulate.
+>
+> An earlier draft of this spec assumed the library kept its own rolling
+> buffers. It does not, and that assumption reached the code as a comment
+> asserting it. The result passed 236 tests at 100% branch coverage while
+> being incapable of ever firing.
+>
+> Two constants follow, both constructor arguments so the on-device CPU
+> measurement can tune them: a **32000-sample window** (2.0 s) and a
+> **1280-sample hop** (80 ms — the model's own embedding stride, so one new
+> embedding per scored window). Scoring every 20 ms frame would mean 50
+> full-window ONNX passes a second, which a Zero 2W cannot afford.
+>
+> `reset()` clears the buffer and **keeps** the model. Dropping the model
+> forces a full ONNX session rebuild on the next frame — seconds of stall on
+> a Pi, after every wake.
+
 ### `palm_9000/processors.py` — `WakeWordGate`
 
 A `FrameProcessor` holding a detector, the LLM service and the timeout. It
@@ -198,8 +231,17 @@ AWAKE   --(no speech for silence_timeout_secs)--> ASLEEP
   INFO.
 - **AWAKE:** skip detection. Reset the silence deadline on
   `UserStartedSpeakingFrame`, `UserStoppedSpeakingFrame`,
-  `BotStartedSpeakingFrame`, `BotStoppedSpeakingFrame`. On expiry, call
-  `set_audio_input_paused(True)`.
+  `UserSpeakingFrame`, `BotStartedSpeakingFrame`, `BotStoppedSpeakingFrame`,
+  `BotSpeakingFrame`. On expiry, call `set_audio_input_paused(True)`.
+
+  The two *continuing* frames are load-bearing, not padding. Nothing
+  arrives between a start and a stop, so with only the four start/stop
+  frames a 45-second bot reply trips the 30-second timeout while the bot is
+  still audibly talking — and the `BotStoppedSpeakingFrame` that follows is
+  then ignored, because the deadline only refreshes while awake. Both
+  continuing frames are broadcast about every 0.2 s
+  (`base_output.py:805` for the bot; `VADController.on_speech_activity` via
+  the user aggregator for the user).
 
 Starting asleep is structural: the service is built with
 `start_audio_paused=True`, so audio cannot reach Google before a wake even if
@@ -257,9 +299,24 @@ author of this spec once already.
 - Detector against the **real committed model**: silence and white noise both
   score 0.0 (verified during design), so neither false-triggers. Keeps the
   ONNX wiring honest rather than only exercising a stub.
+
+  > **Corrected during implementation: as written, this test is a fiction.**
+  > `predict()` returns exactly `0.0` for *every* input shorter than ~2 s,
+  > so an assertion that silence and noise score below a threshold passes
+  > against a model that would also score `0.0` on a perfect wake word. It
+  > proves nothing.
+  >
+  > A real-model test must (a) drive the detector at the transport's actual
+  > **320-sample / 640-byte** frame size, and (b) assert the score is
+  > **non-zero** once a full window has accumulated — `0.0047` for silence.
+  > Non-zero is the load-bearing part: it is the only evidence the
+  > embedding and classifier path ran at all, rather than hitting the
+  > not-enough-data early return. That one assertion would have caught the
+  > Critical described in the `wakeword.py` section above.
 - `WakeWordGate` like `AudioRecordingControlProcessor`: assertions on
   `set_audio_input_paused` calls, on the deadline resetting for each of the
-  four activity frames, and on every frame being forwarded.
+  six activity frames, and on every frame being forwarded. Include a test
+  that a long bot turn does not trip the timeout mid-reply.
 - `main.py` wiring: gate present only when enabled; `start_audio_paused=True`
   only when enabled.
 - **Mutation checks** on each claim: removing the gate, defaulting
