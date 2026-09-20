@@ -113,6 +113,28 @@ downstream of the aggregator and it stops seeing all four: the deadline
 never resets, and the plant goes deaf 30 seconds into a conversation,
 with no error.
 
+**`vad_analyzer` is attached only when gating is on.** This is not a
+tidiness choice. A `vad_analyzer` is what constructs pipecat's
+`VADController` at all (`if self._params.vad_analyzer:`,
+`llm_response_universal.py:756`) and brings the default
+`VADUserTurnStartStrategy` to life; that strategy broadcasts an
+interruption on every detected turn start
+(`llm_response_universal.py:1327-1329`), which `GeminiLiveLLMService`
+turns into a `TTSStoppedFrame` that cuts the bot off mid-sentence
+(`gemini_live/llm.py:1036-1037`, `:960-966`). Attaching Silero
+unconditionally woke all of that on every run, including gating off,
+where nothing needs it: imperfect echo cancellation — the risk the
+Hardware section already names as "the bot hears itself and talks to
+itself" — lets a sliver of the bot's own TTS reach the mic, local VAD
+reads it as speech, and the bot interrupts itself, a failure that did
+not exist before this branch. `GeminiLiveLLMService` also logs
+pipecat's "not emitting turn frames" warning once at startup either
+way — `service_metadata_frame()` never looks at the aggregator, so
+seeing it does not mean local VAD is missing. Its own suggested fix is
+"set a vad_analyzer in LLMUserAggregatorParams"; that is not a reason
+to attach one unconditionally. Doing so to quiet the warning is the
+same mistake that caused this bug.
+
 ## Tests
 
 `tests/conftest.py` injects fakes for `RPi.GPIO`, `pyaudio` and `sounddevice`
