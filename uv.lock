@@ -3699,6 +3699,7 @@ dependencies = [
     { name = "pipecat-ai", extra = ["google", "local"] },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "rpi-gpio", marker = "sys_platform == 'linux'" },
     { name = "spidev", marker = "sys_platform == 'linux'" },
 ]
 
@@ -3730,7 +3731,6 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "pyttsx3" },
-    { name = "rpi-gpio", marker = "sys_platform == 'linux'" },
     { name = "ruff" },
     { name = "scipy" },
     { name = "sounddevice" },
@@ -3755,6 +3755,7 @@ requires-dist = [
     { name = "pipecat-ai", extras = ["google", "local", "silero"], specifier = ">=1.11.0,<2" },
     { name = "pydantic", specifier = ">=2.11.7" },
     { name = "pydantic-settings", specifier = ">=2.10.1" },
+    { name = "rpi-gpio", marker = "sys_platform == 'linux'", specifier = ">=0.7.1" },
     { name = "spidev", marker = "sys_platform == 'linux'", specifier = ">=3.7" },
 ]
 
@@ -3786,7 +3787,6 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=0.24.0" },
     { name = "pytest-cov", specifier = ">=6.0.0" },
     { name = "pyttsx3", specifier = ">=2.98" },
-    { name = "rpi-gpio", marker = "sys_platform == 'linux'", specifier = ">=0.7.1" },
     { name = "ruff", specifier = ">=0.14.0" },
     { name = "scipy", specifier = ">=1.16.0" },
     { name = "sounddevice", specifier = ">=0.5.2" },

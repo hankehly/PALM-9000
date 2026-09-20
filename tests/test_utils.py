@@ -2,7 +2,10 @@ import struct
 from unittest.mock import MagicMock
 
 import numpy as np
+import pyaudio
 import pytest
+import scipy.signal
+import sounddevice
 
 from palm_9000 import utils
 
@@ -33,7 +36,7 @@ class TestResample:
             captured["down"] = down
             return audio
 
-        monkeypatch.setattr(utils, "resample_poly", fake_resample_poly)
+        monkeypatch.setattr(scipy.signal, "resample_poly", fake_resample_poly)
         utils.resample(np.zeros(10), 44100, 16000)
 
         assert (captured["up"], captured["down"]) == (160, 441)
@@ -41,7 +44,7 @@ class TestResample:
     def test_identical_rates_reduce_to_one_to_one(self, monkeypatch):
         captured = {}
         monkeypatch.setattr(
-            utils,
+            scipy.signal,
             "resample_poly",
             lambda a, up, down: captured.update(up=up, down=down) or a,
         )
@@ -57,7 +60,7 @@ class TestPlayAudio:
     def test_writes_every_frame_to_the_stream(self, monkeypatch):
         pa = MagicMock()
         stream = pa.open.return_value
-        monkeypatch.setattr(utils.pyaudio, "PyAudio", MagicMock(return_value=pa))
+        monkeypatch.setattr(pyaudio, "PyAudio", MagicMock(return_value=pa))
 
         utils.play_audio(self._pcm(), sample_rate=16000)
 
@@ -70,7 +73,7 @@ class TestPlayAudio:
 
     def test_opens_stream_with_the_given_sample_rate(self, monkeypatch):
         pa = MagicMock()
-        monkeypatch.setattr(utils.pyaudio, "PyAudio", MagicMock(return_value=pa))
+        monkeypatch.setattr(pyaudio, "PyAudio", MagicMock(return_value=pa))
 
         utils.play_audio(self._pcm(n=64), sample_rate=24000)
 
@@ -82,7 +85,7 @@ class TestPlayAudio:
     def test_volume_multiplies_samples(self, monkeypatch):
         pa = MagicMock()
         stream = pa.open.return_value
-        monkeypatch.setattr(utils.pyaudio, "PyAudio", MagicMock(return_value=pa))
+        monkeypatch.setattr(pyaudio, "PyAudio", MagicMock(return_value=pa))
 
         utils.play_audio(self._pcm(n=64, amplitude=1000), volume=2.0)
 
@@ -94,7 +97,7 @@ class TestPlayAudio:
         """Without np.clip, int16 overflow would wrap to a negative value."""
         pa = MagicMock()
         stream = pa.open.return_value
-        monkeypatch.setattr(utils.pyaudio, "PyAudio", MagicMock(return_value=pa))
+        monkeypatch.setattr(pyaudio, "PyAudio", MagicMock(return_value=pa))
 
         utils.play_audio(self._pcm(n=64, amplitude=30000), volume=4.0)
 
@@ -113,7 +116,7 @@ class TestPlayAudio:
 
         pa.open.side_effect = capture_open
         pa.get_format_from_width.side_effect = lambda w: f"width{w}"
-        monkeypatch.setattr(utils.pyaudio, "PyAudio", MagicMock(return_value=pa))
+        monkeypatch.setattr(pyaudio, "PyAudio", MagicMock(return_value=pa))
 
         utils.play_audio(self._pcm(n=64))
 
@@ -122,7 +125,7 @@ class TestPlayAudio:
 
 class TestWaitUntilDeviceAvailable:
     def test_returns_true_once_the_device_checks_out(self, monkeypatch):
-        monkeypatch.setattr(utils.sd, "check_input_settings", lambda device: None)
+        monkeypatch.setattr(sounddevice, "check_input_settings", lambda device: None)
         assert utils.wait_until_device_available(1) is True
 
     def test_retries_until_the_device_appears(self, monkeypatch):
@@ -133,13 +136,13 @@ class TestWaitUntilDeviceAvailable:
             if attempts["n"] < 3:
                 raise OSError("device busy")
 
-        monkeypatch.setattr(utils.sd, "check_input_settings", flaky)
+        monkeypatch.setattr(sounddevice, "check_input_settings", flaky)
         assert utils.wait_until_device_available(1, timeout=5.0) is True
         assert attempts["n"] == 3
 
     def test_raises_after_the_timeout(self, monkeypatch):
         monkeypatch.setattr(
-            utils.sd,
+            sounddevice,
             "check_input_settings",
             MagicMock(side_effect=OSError("never available")),
         )

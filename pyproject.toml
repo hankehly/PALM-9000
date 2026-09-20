@@ -11,7 +11,12 @@ dependencies = [
     "pydantic>=2.11.7",
     "pydantic-settings>=2.10.1",
     "pipecat-ai[google,local,silero]>=1.11.0,<2",
+    # Hardware access for the Pi. Both are Linux-only wheels, so they are
+    # marked accordingly and simply absent on a development Mac.
+    # spidev drives the MAX7219 (palm_9000/gpio.py); RPi.GPIO drives the
+    # ADC0834 (palm_9000/adc0834.py), which the soil-moisture sensor needs.
     "spidev>=3.7 ; sys_platform == 'linux'",
+    "rpi-gpio>=0.7.1 ; sys_platform == 'linux'",
 ]
 
 [dependency-groups]
@@ -59,7 +64,6 @@ dev = [
     "llama-index-tools-google>=0.6.0",
     "gpiozero>=2.0.1",
     "pigpio>=1.78",
-    "rpi-gpio>=0.7.1 ; sys_platform == 'linux'",
 ]
 
 [tool.pytest.ini_options]
