@@ -6,6 +6,16 @@ __pycache__
 
 # Secrets and local configuration
 .env
+# Credential files. This replaces a previous blanket `*.json`, which also hid
+# legitimate config (editor settings, tool configs). No .json file has ever
+# been committed to this repo, so nothing was relying on the broad form.
+*-credentials.json
+*.credentials.json
+credentials.json
+service-account*.json
+
+# Editor and OS cruft
+.DS_Store
 
 # Testing and coverage
 .coverage
@@ -18,9 +28,6 @@ htmlcov
 *.wav
 
 # Models and vector stores
-# NOTE: *.json is deliberately broad here; it predates the current layout and
-# will also swallow legitimate config files if any are added.
-*.json
 *.onnx
 *.ppn
 *.pv
