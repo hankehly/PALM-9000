@@ -689,6 +689,31 @@ class TestStopDoesNotMaskTheRealError:
                 await asyncio.sleep(0.01)
                 raise RuntimeError("the real problem")
 
+    async def test_cancelling_the_caller_of_stop_propagates_with_the_real_loop(
+        self, fake_hardware
+    ):
+        """The production path: _run() suppresses CancelledError.
+
+        wait_for cancels _run, _run swallows it and returns normally, and
+        wait_for then returns that result -- so a cancellation of the task
+        executing stop() disappears entirely unless stop() re-raises it.
+
+        A test that substitutes a coroutine which does NOT suppress
+        cancellation passes without exercising this at all.
+        """
+        # fps=1 keeps _run parked in its sleep, so stop() is still inside
+        # wait_for when the cancellation lands.
+        heart = Max7219AmplitudeHeart(fps=1)
+        await heart.start()
+        await asyncio.sleep(0.01)
+
+        stopping = asyncio.create_task(heart.stop())
+        await asyncio.sleep(0.01)
+        stopping.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await stopping
+
     async def test_cancelling_the_caller_of_stop_propagates(self, fake_hardware):
         """Cancelling the task that is running stop() must still cancel it.
 
