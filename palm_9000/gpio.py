@@ -11,7 +11,7 @@ from luma.led_matrix.device import max7219
 _INT16_MAX = 32768.0
 
 # The heart, as (x, y) points on the 8x8 grid. Static: only its brightness
-# changes at runtime, which is why _run() pushes the framebuffer once.
+# changes at runtime, so _run() reuses it for initial and periodic redraws.
 _HEART_PIXELS = (
     # fmt: off
     (1, 1),
@@ -62,8 +62,8 @@ class Max7219AmplitudeHeart:
 
     `start()` / `stop()` are available directly when the lifetime does not
     nest that neatly. Brightness is EMA-smoothed and gamma-corrected for
-    perceptual response; see _run() for why a steady level costs no SPI
-    traffic.
+    perceptual response; see _run() for why a steady level avoids per-frame
+    SPI traffic.
     """
 
     def __init__(
