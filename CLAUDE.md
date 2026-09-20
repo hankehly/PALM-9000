@@ -159,19 +159,51 @@ utterance straddling the re-arm instant loses its beginning.
 strategy defaults to `enable_interruptions=True`
 (`base_user_turn_start_strategy.py:56`), so echo leakage or a second
 person talking will cut a reply off mid-sentence without any wake word.
-This is accepted rather than fixed: there is no knob for it on
-`LLMUserAggregatorParams`, and suppressing it means pinning pipecat's
-whole default strategy list — the kind of coupling to internals that
-caused the silent-audio bug above. Barge-in is also often wanted. It is
-step 6 of `docs/wake-word-on-device-checklist.md`, which is where the
-rest of the unverified hardware behaviour is tracked too.
+**This is confirmed on hardware, not a theoretical risk.** On the first
+real sentence the log shows `broadcasting interruption` 0.7 s after the
+user's speech was transcribed, and three more times during the reply —
+the bot audibly cut itself off. Do not ship gating on without addressing
+it.
 
-**With gating on, the 10-minute idle timeout effectively stops firing.**
-Local VAD emits `UserStartedSpeakingFrame` and `UserSpeakingFrame`,
-both in `PipelineWorker`'s default idle set (`worker.py:301-307`), so
-any room noise — a television, a conversation nearby — keeps resetting
-`IDLE_TIMEOUT_SECS`. Harmless, since nothing uploads while the gate is
-asleep, but do not rely on that timeout as a backstop when gating is on.
+An earlier version of this note called it "accepted, not fixed", on the
+grounds that there is no knob and that suppressing it means pinning
+pipecat's whole strategy list. Both halves were wrong:
+
+- `enable_interruptions` and `enable_user_speaking_frames` are
+  **independent** constructor parameters
+  (`base_user_turn_start_strategy.py:53-58`), so the interruption can be
+  disabled while the gate keeps the speaking frames its silence timer
+  needs.
+- In realtime mode pipecat already mutates the strategy list down to a
+  single `VADUserTurnStartStrategy`, and
+  `_apply_realtime_mode_strategy_mutations`
+  (`llm_response_universal.py:960-985`) only ever **drops** strategies,
+  never adds. Passing one explicit start strategy is therefore stable,
+  not fragile.
+
+**While you are there: `LocalSmartTurnAnalyzerV3` is a second ONNX model
+you are probably paying for by accident.** `UserTurnStrategies` defaults
+its *stop* strategy to `TurnAnalyzerUserTurnStopStrategy(LocalSmartTurnAnalyzerV3)`,
+which loads `smart-turn-v3.2-cpu.onnx` and runs end-of-turn inference.
+Gemini does turn detection server-side, so none of it is needed here; it
+arrives as a default alongside `vad_analyzer`.
+`SpeechTimeoutUserTurnStopStrategy` is a non-ONNX alternative. Note
+`UserTurnStrategies.__post_init__` treats an empty list as "unset" and
+restores the defaults, so pass a real strategy rather than `[]`.
+
+**With gating on, room noise can hold the 10-minute idle timeout open.**
+Local VAD emits `UserStartedSpeakingFrame` and `UserSpeakingFrame`, both
+in `PipelineWorker`'s default idle set (`worker.py:301-307`), so a
+television or a nearby conversation keeps resetting `IDLE_TIMEOUT_SECS`.
+It is *not* disabled, though: measured on the Pi in a quiet room it fired
+at exactly 600 s and shut the app down as designed. Treat it as
+unreliable-when-noisy rather than absent.
+
+That same shutdown exposed something worth knowing: the `CancelFrame`
+took **20 seconds** to traverse the pipeline, and pipecat said so —
+`timeout waiting for CancelFrame#0 to reach the end of the pipeline
+(being blocked somewhere?)`. That is the wake-word inference blocking the
+event loop, showing up as measured unresponsiveness rather than theory.
 
 **`vad_analyzer` is attached only when gating is on.** This is not a
 tidiness choice. A `vad_analyzer` is what constructs pipecat's
