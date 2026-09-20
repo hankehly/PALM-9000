@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from palm_9000.wakeword import (
+    HOP_SAMPLES,
     MIN_WINDOW_SAMPLES,
     WINDOW_SAMPLES,
     LiveKitWakeWordDetector,
@@ -181,21 +182,55 @@ class TestBuffering:
         )
         frame = np.zeros(frame_samples, dtype=np.int16).tobytes()
 
-        # Fill the window first. Scoring-while-filling leaves its own
-        # backlog in _samples_since_score (every call counts toward it even
-        # while the window isn't full yet), which is a separate,
-        # pre-existing characteristic of the warm-up and not what this test
-        # is about, so it is cleared before measuring the steady-state rate.
+        # Fill the window first, so this measures the steady-state rate.
+        # No need to clear _samples_since_score by hand: taking the backlog
+        # modulo the hop already leaves it at 0 here, which is what
+        # test_filling_the_window_does_not_cause_a_burst_of_scores pins.
         for _ in range(WINDOW_SAMPLES // frame_samples):
             detector.process(frame)
+        assert detector._samples_since_score == 0
         model.calls.clear()
-        detector._samples_since_score = 0
 
         num_frames = 500
         for _ in range(num_frames):
             detector.process(frame)
 
         assert len(model.calls) == 160  # nominal: 500 * 320 / 1000
+
+    def test_filling_the_window_does_not_cause_a_burst_of_scores(self):
+        """The warm-up backlog must not turn into consecutive predict() calls.
+
+        _samples_since_score counts every frame, including the ~2s of frames
+        that merely fill the buffer. On the frame where the window first
+        fills it therefore holds a whole window of backlog. Draining that
+        one hop at a time scored on 33 consecutive frames -- measured, at
+        the real 320-sample frame size -- which is ~5s of solid,
+        event-loop-blocking inference on a slow Pi, at startup and again
+        after every wake, since reset() empties the buffer.
+
+        Taking the backlog modulo the hop keeps the remainder (so the
+        rounding test above still holds) while discarding the backlog.
+        """
+        model = FakeModel()
+        detector = LiveKitWakeWordDetector(
+            MODEL, model=model, window_samples=WINDOW_SAMPLES, hop_samples=HOP_SAMPLES
+        )
+        frame = np.zeros(REAL_FRAME_SAMPLES, dtype=np.int16).tobytes()
+
+        fill_frames = WINDOW_SAMPLES // REAL_FRAME_SAMPLES
+        for _ in range(fill_frames):
+            detector.process(frame)
+
+        # The fill frame itself scores once; the next frames must not,
+        # until a fresh hop has actually elapsed.
+        assert len(model.calls) == 1
+        hop_frames = HOP_SAMPLES // REAL_FRAME_SAMPLES
+        for _ in range(hop_frames - 1):
+            detector.process(frame)
+        assert len(model.calls) == 1, "backlog drained as a burst of scores"
+
+        detector.process(frame)
+        assert len(model.calls) == 2, "scoring did not resume after one hop"
 
     def test_predict_receives_a_full_window(self):
         model = FakeModel()

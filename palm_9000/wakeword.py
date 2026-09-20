@@ -120,13 +120,23 @@ class LiveKitWakeWordDetector:
         if not (window_full and hop_elapsed):
             return 0.0
 
-        # Subtract rather than zero: zeroing discards whatever backlog was
-        # already past hop_samples, which rounds the effective hop up to
-        # the next frame-size multiple whenever frame size doesn't evenly
-        # divide hop_samples (e.g. a hop tuned on the Pi). Subtracting
-        # keeps that remainder so the long-run scoring rate matches the
-        # nominal hop even when a single frame is larger than it.
-        self._samples_since_score -= self.hop_samples
+        # Modulo, not zero and not repeated subtraction.
+        #
+        # Zeroing would discard whatever backlog was already past
+        # hop_samples, rounding the effective hop up to the next frame-size
+        # multiple whenever the frame size doesn't evenly divide
+        # hop_samples (e.g. a hop tuned on the Pi).
+        #
+        # Subtracting a single hop keeps that remainder, but the counter
+        # also accumulates through the whole window fill -- so on the frame
+        # where the buffer first fills it holds ~a full window of backlog
+        # and drains it one hop per frame, scoring on 33 consecutive frames.
+        # That is ~5s of solid, event-loop-blocking inference on a slow Pi,
+        # at startup and again after every single wake, since reset()
+        # empties the buffer.
+        #
+        # Modulo keeps the remainder AND discards the backlog in one step.
+        self._samples_since_score %= self.hop_samples
         scores = self._model.predict(self._buffer)
         if not scores:
             return 0.0

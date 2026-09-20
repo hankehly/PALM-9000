@@ -129,6 +129,7 @@ def env(monkeypatch):
         "WAKE_WORD_MODEL_PATH",
         "WAKE_WORD_THRESHOLD",
         "WAKE_SILENCE_TIMEOUT_SECS",
+        "WAKE_WORD_HOP_SAMPLES",
     ):
         monkeypatch.delenv(name, raising=False)
     return monkeypatch
