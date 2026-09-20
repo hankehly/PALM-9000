@@ -117,6 +117,14 @@ class Max7219AmplitudeHeart:
         """
         if not self._task:
             return
+
+        # Task.cancelling() is a cumulative count, not a flag for this call:
+        # a caller that was cancelled once and handled it deliberately still
+        # reports a nonzero count forever after. Record the baseline so only
+        # a *new* request during this call counts as cancelling us.
+        current = asyncio.current_task()
+        cancellations_before = current.cancelling() if current is not None else 0
+
         self._stop_evt.set()
         try:
             await asyncio.wait_for(self._task, timeout=0.5)
@@ -148,8 +156,7 @@ class Max7219AmplitudeHeart:
         # absorbed: wait_for cancels _run, _run returns normally anyway, and
         # wait_for hands back that result instead of propagating. Without
         # this check the caller's cancellation would vanish silently.
-        current = asyncio.current_task()
-        if current is not None and current.cancelling():
+        if current is not None and current.cancelling() > cancellations_before:
             raise asyncio.CancelledError()
 
     async def __aenter__(self) -> "Max7219AmplitudeHeart":
