@@ -104,3 +104,30 @@ def test_module_level_singleton_is_importable(env, monkeypatch):
 
     reloaded = importlib.reload(settings_module)
     assert reloaded.settings.google_api_key.get_secret_value() == "k"
+
+
+class TestWakeWordSettings:
+    def test_disabled_by_default(self, env):
+        """Merging the feature must not change runtime behaviour."""
+        settings = Settings(_env_file=None, google_api_key="k")
+        assert settings.wake_word_enabled is False
+
+    def test_defaults(self, env):
+        settings = Settings(_env_file=None, google_api_key="k")
+        assert settings.wake_word_model_path == "models/wakeword/hey_livekit.onnx"
+        assert settings.wake_word_threshold == 0.5
+        assert settings.wake_silence_timeout_secs == 30.0
+
+    def test_env_overrides(self, env):
+        env.setenv("GOOGLE_API_KEY", "k")
+        env.setenv("WAKE_WORD_ENABLED", "true")
+        env.setenv("WAKE_WORD_MODEL_PATH", "models/wakeword/other.onnx")
+        env.setenv("WAKE_WORD_THRESHOLD", "0.8")
+        env.setenv("WAKE_SILENCE_TIMEOUT_SECS", "12.5")
+
+        settings = Settings(_env_file=None)
+
+        assert settings.wake_word_enabled is True
+        assert settings.wake_word_model_path == "models/wakeword/other.onnx"
+        assert settings.wake_word_threshold == 0.8
+        assert settings.wake_silence_timeout_secs == 12.5

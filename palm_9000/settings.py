@@ -9,6 +9,13 @@ class Settings(BaseSettings):
     google_multimodal_live_voice_id: str = "Puck"
     gemini_live_model: str = "models/gemini-3.8-live"
 
+    # Wake-word gating. Disabled by default: with it off the app behaves
+    # exactly as before and streams audio continuously while running.
+    wake_word_enabled: bool = False
+    wake_word_model_path: str = "models/wakeword/hey_livekit.onnx"
+    wake_word_threshold: float = 0.5
+    wake_silence_timeout_secs: float = 30.0
+
     # Only needed by the cascaded GoogleSTTService / GoogleTTSService path,
     # not by the Gemini Live pipeline in main.py.
     google_cloud_project: str | None = None
