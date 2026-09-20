@@ -3,6 +3,10 @@ import time
 import RPi.GPIO as GPIO
 
 
+class ADC0834ReadError(RuntimeError):
+    """The chip's two readings of the same conversion disagreed."""
+
+
 class ADC0834:
     """
     A class representing the ADC0834 Analog-to-Digital Converter.
@@ -13,6 +17,10 @@ class ADC0834:
         dio (int): The data input/output GPIO pin number.
         frequency (int): The frequency of the clock signal in Hz.
             The acceptable range is 10-400 kHz (10,000 - 400,000 Hz)
+
+    Pin numbers are BCM. `setup()` selects BCM mode if the caller has not
+    already chosen one, and refuses to run under BOARD mode, where these
+    numbers would silently address the wrong pins.
     """
 
     def __init__(self, cs: int, clk: int, dio: int, frequency: int = 50_000) -> None:
@@ -21,7 +29,31 @@ class ADC0834:
         self.dio = dio
         self.frequency = frequency
 
+    @property
+    def _half_period(self) -> float:
+        return 1 / self.frequency / 2
+
     def setup(self) -> "ADC0834":
+        """Configure the pins. Selects BCM numbering if none is set yet.
+
+        RPi.GPIO requires a pin-numbering mode before any setup() call, and
+        raises an unhelpful error if none has been chosen. Doing it here means
+        callers do not have to remember `GPIO.setmode(GPIO.BCM)` first.
+        """
+        mode = GPIO.getmode()
+        if mode is None:
+            GPIO.setmode(GPIO.BCM)
+        elif mode != GPIO.BCM:
+            # Only BCM is supported, so converting the caller's pin numbers
+            # to BOARD would still be rejected here. Offer the one remedy
+            # that actually works.
+            raise RuntimeError(
+                f"ADC0834 addresses pins by BCM number, but GPIO numbering "
+                f"is already set to {mode}. This class does not support "
+                f"BOARD numbering; call GPIO.setmode(GPIO.BCM) before "
+                f"setup()."
+            )
+
         GPIO.setup(self.cs, GPIO.OUT)
         GPIO.setup(self.clk, GPIO.OUT)
         return self
@@ -29,7 +61,15 @@ class ADC0834:
     def read(self, channel: int = 0) -> int:
         """
         Read the value from the specified channel.
+
         Returns an int between 0 and 255.
+
+        The chip clocks the same conversion out twice, MSB-first then
+        LSB-first. If the two disagree the reading is corrupt -- usually
+        loose wiring or too high a clock frequency -- and this raises
+        ADC0834ReadError. It previously returned 0 in that case, which was
+        indistinguishable from a genuine zero reading; for a moisture sensor
+        that meant a wiring fault looked like bone-dry soil.
         """
         # Set CS pin to low to enable the ADC
         GPIO.output(self.cs, GPIO.LOW)
@@ -37,25 +77,10 @@ class ADC0834:
         # Set DIO pin to output to setup the ADC to read from the specified channel
         GPIO.setup(self.dio, GPIO.OUT)
 
-        # Start bit
-        self._set_clock_low()
-        GPIO.output(self.dio, 1)
-        self._set_clock_high()
-
-        # SGL/DIF
-        self._set_clock_low()
-        GPIO.output(self.dio, 1)
-        self._set_clock_high()
-
-        # ODD/SIGN
-        self._set_clock_low()
-        GPIO.output(self.dio, channel % 2)
-        self._set_clock_high()
-
-        # SELECT1
-        self._set_clock_low()
-        GPIO.output(self.dio, int(channel > 1))
-        self._set_clock_high()
+        self._write_bit(1)  # Start bit
+        self._write_bit(1)  # SGL/DIF: single-ended
+        self._write_bit(channel % 2)  # ODD/SIGN
+        self._write_bit(int(channel > 1))  # SELECT1
 
         # Allow the MUX to settle for 1/2 clock cycle
         self._set_clock_low()
@@ -64,18 +89,18 @@ class ADC0834:
         GPIO.setup(self.dio, GPIO.IN)
 
         # Read data from MSB to LSB
-        val1 = 0
+        msb_first = 0
         for _ in range(0, 8):
             self._set_clock_high()
             self._set_clock_low()
-            val1 = val1 << 1
-            val1 = val1 | GPIO.input(self.dio)
+            msb_first = msb_first << 1
+            msb_first = msb_first | GPIO.input(self.dio)
 
         # Read data from LSB to MSB
-        val2 = 0
+        lsb_first = 0
         for i in range(0, 8):
             bit = GPIO.input(self.dio) << i
-            val2 = val2 | bit
+            lsb_first = lsb_first | bit
             self._set_clock_high()
             self._set_clock_low()
 
@@ -86,10 +111,18 @@ class ADC0834:
         GPIO.setup(self.dio, GPIO.OUT)
 
         # Compare the two values to ensure they match
-        if val1 == val2:
-            return val1
-        else:
-            return 0
+        if msb_first != lsb_first:
+            raise ADC0834ReadError(
+                f"channel {channel} readings disagree: "
+                f"{msb_first} (MSB-first) vs {lsb_first} (LSB-first)"
+            )
+        return msb_first
+
+    def _write_bit(self, value: int) -> None:
+        """Clock one bit out to the chip on the falling-then-rising edge."""
+        self._set_clock_low()
+        GPIO.output(self.dio, value)
+        self._set_clock_high()
 
     def _set_clock_high(self):
         GPIO.output(self.clk, GPIO.HIGH)
@@ -100,6 +133,4 @@ class ADC0834:
         self._tick()
 
     def _tick(self):
-        period = 1 / self.frequency
-        period_half = period / 2
-        time.sleep(period_half)
+        time.sleep(self._half_period)

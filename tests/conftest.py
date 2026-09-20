@@ -42,9 +42,19 @@ class FakeGPIO:
         self.calls: list[tuple] = []
         self.setups: list[tuple] = []
         self.outputs: list[tuple] = []
+        # RPi.GPIO requires a pin-numbering mode before setup(); None means
+        # the caller has not chosen one yet.
+        self.mode = None
         # Values that successive input() calls return.
         self.input_values: list[int] = []
         self._input_index = 0
+
+    def setmode(self, mode):
+        self.mode = mode
+        self.calls.append(("setmode", mode))
+
+    def getmode(self):
+        return self.mode
 
     def setup(self, pin, mode):
         self.setups.append((pin, mode))
@@ -68,6 +78,8 @@ _rpi_module = types.ModuleType("RPi")
 _gpio_module = types.ModuleType("RPi.GPIO")
 for _name in ("BCM", "OUT", "IN", "HIGH", "LOW"):
     setattr(_gpio_module, _name, getattr(FakeGPIO, _name))
+_gpio_module.setmode = _fake_gpio.setmode
+_gpio_module.getmode = _fake_gpio.getmode
 _gpio_module.setup = _fake_gpio.setup
 _gpio_module.output = _fake_gpio.output
 _gpio_module.input = _fake_gpio.input
