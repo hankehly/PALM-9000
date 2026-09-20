@@ -536,6 +536,18 @@ class TestBlank:
     def test_logs_instead_of_raising_when_the_bus_fails(
         self, fake_hardware, monkeypatch
     ):
+        """Swallowing the error is only acceptable because it is logged.
+
+        Asserting merely that _blank() does not raise would leave the
+        diagnostic unprotected: deleting the logger.debug call entirely still
+        passes such a test, and the silent-shutdown behaviour this PR removes
+        could come straight back.
+        """
+        messages = []
+        monkeypatch.setattr(
+            gpio_module.logger, "debug", lambda msg, *a, **kw: messages.append(msg)
+        )
+
         heart = Max7219AmplitudeHeart()
         heart._open_device()
 
@@ -544,6 +556,10 @@ class TestBlank:
 
         monkeypatch.setattr(heart.device, "contrast", boom)
         heart._blank()  # swallowed, not raised
+
+        assert messages, "the SPI failure was swallowed without a diagnostic"
+        assert "SPI went away" in messages[0], messages
+        assert "blank" in messages[0].lower(), messages
 
     def test_turns_the_display_off(self, fake_hardware):
         heart = Max7219AmplitudeHeart()
@@ -611,6 +627,7 @@ class TestStopDoesNotMaskTheRealError:
         await heart.stop()
 
         assert records, "the render task failure vanished without a trace"
+        assert any("render task failed" in m.lower() for m in records), records
 
     async def test_failure_during_cancellation_is_also_contained(
         self, fake_hardware, monkeypatch
@@ -673,6 +690,7 @@ class TestStopDoesNotMaskTheRealError:
 
         assert heart._task is None
         assert records, "the TimeoutError vanished without a trace"
+        assert any("render task failed" in m.lower() for m in records), records
 
     async def test_task_timeouterror_does_not_replace_the_body_error(
         self, fake_hardware, monkeypatch
