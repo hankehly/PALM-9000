@@ -114,8 +114,29 @@ Wiring for the mic, speaker, LED matrix and echo cancellation is documented in
 
 ## Deploying to the Pi
 
-The Pi has no SSH key for GitHub, so it cannot `git pull`. Deploy with rsync
-from a development machine, excluding `.env` and `.venv`:
+Deploy by pulling from GitHub. The repository is public and the Pi's remote
+uses HTTPS, so this needs no credentials on the device — no SSH key, no token,
+nothing to rotate or leak:
+
+```sh
+ssh raspberrypi-zero2w.local
+cd ~/Projects/PALM-9000
+git pull
+uv sync --no-dev
+```
+
+A Zero 2W has 416 MB of RAM, so installs are slow; expect several minutes.
+
+`.env` is gitignored and lives only on the Pi, so a pull never touches it.
+The Pi keeps its own copy with its own values — `INPUT_DEVICE` in particular
+differs from a development machine, so never copy that file between them.
+
+Because the remote is HTTPS and anonymous, the Pi can pull but cannot push.
+That is intentional for a deploy target. If the repository is ever made
+private this stops working; the fix then is a read-only deploy key for the
+Pi's existing `~/.ssh/id_ed25519.pub`, not an account-wide SSH key.
+
+rsync is still useful for deploying uncommitted work while debugging:
 
 ```sh
 rsync -av --exclude '.git/' --exclude '.venv/' --exclude '.env' \
@@ -123,8 +144,9 @@ rsync -av --exclude '.git/' --exclude '.venv/' --exclude '.env' \
       ./ raspberrypi-zero2w.local:/home/pi/Projects/PALM-9000/
 ```
 
-Then `uv sync --no-dev` on the Pi. A Zero 2W has 416 MB of RAM, so installs
-are slow; expect several minutes.
+Note that rsyncing leaves the Pi's working tree dirty relative to its commit,
+which blocks a later `git pull`. Clear it with `git reset --hard origin/main`
+once the change is committed upstream (`.env` is safe: it is ignored).
 
 When killing a run over SSH, note that `pkill -f main.py` will match the SSH
 command's own line and kill your session. Use a bracket pattern
