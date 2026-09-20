@@ -7,7 +7,7 @@ device's built-in integrity check.
 
 import pytest
 
-from palm_9000.adc0834 import ADC0834
+from palm_9000.adc0834 import ADC0834, ADC0834ReadError
 
 CS, CLK, DIO = 17, 18, 27
 
@@ -45,10 +45,29 @@ class TestRead:
         fake_gpio.input_values = double_clocked(value)
         assert adc.read() == value
 
-    def test_returns_zero_when_the_two_readings_disagree(self, adc, fake_gpio):
+    def test_raises_when_the_two_readings_disagree(self, adc, fake_gpio):
+        """A corrupt reading must not look like a genuine 0.
+
+        It used to return 0, which for a moisture sensor made a wiring fault
+        indistinguishable from bone-dry soil.
+        """
         # MSB-first says 0xFF, LSB-first says 0x00 -> integrity check fails.
         fake_gpio.input_values = [1] * 8 + [0] * 8
+        with pytest.raises(ADC0834ReadError, match="disagree"):
+            adc.read()
+
+    def test_a_genuine_zero_is_still_returned(self, adc, fake_gpio):
+        """The counterpart: 0 from a clean read is a real value, not an error."""
+        fake_gpio.input_values = double_clocked(0)
         assert adc.read() == 0
+
+    def test_error_names_the_channel_and_both_values(self, adc, fake_gpio):
+        fake_gpio.input_values = [1] * 8 + [0] * 8
+        with pytest.raises(ADC0834ReadError) as excinfo:
+            adc.read(channel=2)
+        message = str(excinfo.value)
+        assert "channel 2" in message
+        assert "255" in message and "0" in message
 
     def test_brackets_the_exchange_with_chip_select(self, adc, fake_gpio):
         fake_gpio.input_values = double_clocked(0)
@@ -140,3 +159,55 @@ class TestClockTiming:
 def test_constructor_stores_pin_assignments(fake_gpio):
     adc = ADC0834(cs=1, clk=2, dio=3, frequency=12_345)
     assert (adc.cs, adc.clk, adc.dio, adc.frequency) == (1, 2, 3, 12_345)
+
+
+class TestPinNumberingMode:
+    """setup() used to fail unless the caller ran GPIO.setmode() first.
+
+    RPi.GPIO refuses any setup() call before a numbering mode is chosen, with
+    an error that does not say so. Hitting this on the Pi cost real time.
+    """
+
+    def test_selects_bcm_when_no_mode_is_set(self, adc, fake_gpio):
+        assert fake_gpio.getmode() is None
+        adc.setup()
+        assert fake_gpio.getmode() == "BCM"
+
+    def test_leaves_an_existing_bcm_mode_alone(self, adc, fake_gpio):
+        fake_gpio.setmode("BCM")
+        before = [c for c in fake_gpio.calls if c[0] == "setmode"]
+        adc.setup()
+        after = [c for c in fake_gpio.calls if c[0] == "setmode"]
+        assert after == before, "setup() re-set a mode that was already correct"
+
+    def test_refuses_to_run_under_board_numbering(self, adc, fake_gpio):
+        """BCM pin numbers under BOARD mode would address the wrong pins."""
+        fake_gpio.setmode("BOARD")
+        with pytest.raises(RuntimeError, match="BCM"):
+            adc.setup()
+
+    def test_board_mode_failure_happens_before_any_pin_is_touched(self, adc, fake_gpio):
+        fake_gpio.setmode("BOARD")
+        with pytest.raises(RuntimeError):
+            adc.setup()
+        assert fake_gpio.setups == [], "pins were configured despite the wrong mode"
+
+
+class TestWriteBit:
+    def test_clocks_the_bit_low_then_high(self, adc, fake_gpio):
+        adc._write_bit(1)
+        assert fake_gpio.calls == [
+            ("output", CLK, 0),
+            ("output", DIO, 1),
+            ("output", CLK, 1),
+        ]
+
+    def test_writes_the_given_value(self, adc, fake_gpio):
+        adc._write_bit(0)
+        dio_writes = [v for p, v in fake_gpio.outputs if p == DIO]
+        assert dio_writes == [0]
+
+
+def test_half_period_tracks_the_frequency():
+    assert ADC0834(cs=1, clk=2, dio=3, frequency=50_000)._half_period == 1 / 100_000
+    assert ADC0834(cs=1, clk=2, dio=3, frequency=400_000)._half_period == 1 / 800_000
