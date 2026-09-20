@@ -25,7 +25,8 @@ def resample(
 
 def play_audio(audio: bytes, sample_rate=16000, volume=1.0):
     """
-    volume is a multiplier for the audio volume, so 1.0 is normal volume, 2.0 is double the volume, etc.
+    volume is a multiplier for the audio volume, so 1.0 is normal volume,
+    2.0 is double the volume, etc.
     Don't set it too high (>=3) or it will clip and distort the audio.
     """
     # Convert raw bytes to NumPy array of int16 samples

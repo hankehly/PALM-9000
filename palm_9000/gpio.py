@@ -37,7 +37,11 @@ class Max7219AmplitudeHeart:
                     # Create a synthetic sine wave whose amplitude slowly pulses
                     amp = 0.2 + 0.75 * (0.5 * (1 + math.sin(2 * math.pi * 0.6 * t)))
                     freq = 440
-                    frame = [int(amp * 0.8 * 32767 * math.sin(2 * math.pi * freq * (t + i / sample_rate))) for i in range(frame_samples)]
+                    frame = [
+                        int(amp * 0.8 * 32767
+                            * math.sin(2 * math.pi * freq * (t + i / sample_rate)))
+                        for i in range(frame_samples)
+                    ]
                     audio_bytes = struct.pack('<' + 'h'*len(frame), *frame)
                     heart.process_audio(audio_bytes)
                     await asyncio.sleep(frame_ms / 1000.0)
@@ -94,7 +98,7 @@ class Max7219AmplitudeHeart:
         self._stop_evt.set()
         try:
             await asyncio.wait_for(self._task, timeout=0.5)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self._task.cancel()
             try:
                 await self._task
@@ -152,12 +156,34 @@ class Max7219AmplitudeHeart:
     def _draw_heart(self) -> None:
         pixels = [
             # fmt: off
-                    (1, 1),                                 (6, 1),
-            (0, 2), (1, 2), (2, 2),                 (5, 2), (6, 2), (7, 2),
-            (0, 3), (1, 3), (2, 3), (3, 3), (4, 3), (5, 3), (6, 3), (7, 3),
-                    (1, 4), (2, 4), (3, 4), (4, 4), (5, 4), (6, 4),
-                            (2, 5), (3, 5), (4, 5), (5, 5),
-                                    (3, 6), (4, 6)
+            (1, 1),
+            (6, 1),
+            (0, 2),
+            (1, 2),
+            (2, 2),
+            (5, 2),
+            (6, 2),
+            (7, 2),
+            (0, 3),
+            (1, 3),
+            (2, 3),
+            (3, 3),
+            (4, 3),
+            (5, 3),
+            (6, 3),
+            (7, 3),
+            (1, 4),
+            (2, 4),
+            (3, 4),
+            (4, 4),
+            (5, 4),
+            (6, 4),
+            (2, 5),
+            (3, 5),
+            (4, 5),
+            (5, 5),
+            (3, 6),
+            (4, 6),
             # fmt: on
         ]
         with canvas(self.device) as draw:

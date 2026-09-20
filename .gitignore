@@ -1,13 +1,33 @@
+# Python
+__pycache__
+
+# Virtual environments
 .venv
-*.wav
+
+# Secrets and local configuration
 .env
+
+# Editor and OS cruft
+.DS_Store
+.vscode/
+
+# Testing and coverage
+.coverage
+.pytest_cache
+coverage.xml
+htmlcov
+
+# Audio artifacts
+*.pcm
+*.wav
+
+# Models and vector stores
+*.onnx
 *.ppn
 *.pv
-*.zip
+chroma_db
 models/*
 !models/.gitkeep
-__pycache__
-*.pcm
-*.onnx
-*.json
-chroma_db
+
+# Archives
+*.zip

@@ -26,7 +26,8 @@ from palm_9000.settings import settings as app_settings
 
 SYSTEM_INSTRUCTION = (
     "You are PALM-9000, a self-aware houseplant powered by an advanced AI. "
-    "You speak in layman's terms with an eerie quality, as if you know more than you let on. "
+    "You speak in layman's terms with an eerie quality, "
+    "as if you know more than you let on. "
     "すべて日本語で出力してください。翻訳・英訳・ローマ字・ふりがな・注釈・補足は一切表示しないでください。"
     "括弧（）の使用も避けてください。"
 )
@@ -72,7 +73,9 @@ async def main():
     #        from pipecat.services.google.stt import GoogleSTTService
     #        from pipecat.services.google.tts import GoogleTTSService
     #
-    # stt = GoogleSTTService(params=GoogleSTTService.InputParams(languages=[Language.JA]))
+    # stt = GoogleSTTService(
+    #     params=GoogleSTTService.InputParams(languages=[Language.JA])
+    # )
     # llm = GoogleLLMService(
     #     api_key=app_settings.google_api_key.get_secret_value(),
     #     model="gemini-2.0-flash",
