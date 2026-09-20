@@ -17,15 +17,23 @@ from palm_9000.gpio import Max7219AmplitudeHeart
 
 
 class FakeDevice:
+    # luma's canvas builds a framebuffer image from these.
+    mode = "1"
+    size = (8, 8)
+
     def __init__(self, *, with_clear=True):
         self.contrasts: list[int] = []
         self.cleared = 0
+        self.displays = 0
         if not with_clear:
             # Exercise the hasattr(device, "clear") guard.
             del type(self).clear
 
     def contrast(self, value):
         self.contrasts.append(value)
+
+    def display(self, image):
+        self.displays += 1
 
     def clear(self):
         self.cleared += 1
@@ -53,6 +61,9 @@ class FakeCanvas:
         return self.draw
 
     def __exit__(self, *exc):
+        # luma pushes the framebuffer to the device when the block exits.
+        if hasattr(self.device, "displays"):
+            self.device.displays += 1
         return False
 
 
@@ -84,17 +95,58 @@ def pcm(samples) -> bytes:
 
 
 class TestConstruction:
-    def test_opens_spi0_ce0_with_one_cascaded_module(self, fake_hardware, monkeypatch):
+    def test_construction_does_not_touch_hardware(self, monkeypatch):
+        """No SPI at __init__ time, so this constructs on a dev machine.
+
+        spidev is Linux-only; opening the bus in __init__ made the class
+        unusable off a Pi. Note the *module* always imported fine -- it was
+        construction that failed.
+        """
+        opened = []
+        monkeypatch.setattr(
+            gpio_module,
+            "spi",
+            lambda **kw: opened.append(kw) or ("spi", kw),
+        )
+        monkeypatch.setattr(
+            gpio_module, "max7219", lambda serial, cascaded=1: FakeDevice()
+        )
+
+        heart = Max7219AmplitudeHeart()
+
+        assert opened == [], "SPI must not be opened until start()"
+        assert heart.device is None
+        assert heart.serial is None
+
+    async def test_start_opens_spi0_ce0_with_one_cascaded_module(
+        self, fake_hardware, monkeypatch
+    ):
         captured = {}
         monkeypatch.setattr(
             gpio_module, "spi", lambda **kw: captured.update(kw) or ("spi", kw)
         )
 
-        h = Max7219AmplitudeHeart()
+        heart = Max7219AmplitudeHeart(fps=1000)
+        await heart.start()
+        try:
+            assert captured["port"] == 0
+            assert captured["device"] == 0
+            assert heart.device.cascaded == 1
+        finally:
+            await heart.stop()
 
-        assert captured["port"] == 0
-        assert captured["device"] == 0
-        assert h.device.cascaded == 1
+    def test_open_device_is_idempotent(self, fake_hardware):
+        heart = Max7219AmplitudeHeart()
+        heart._open_device()
+        first = heart.device
+        heart._open_device()
+        assert heart.device is first
+
+    async def test_stop_before_start_does_not_touch_a_missing_device(self):
+        """stop() must not blow up when the device was never opened."""
+        heart = Max7219AmplitudeHeart()
+        await heart.stop()
+        assert heart.device is None
 
     def test_defaults(self, fake_hardware):
         h = Max7219AmplitudeHeart()
@@ -385,3 +437,76 @@ def test_process_audio_accepts_numpy_backed_bytes(heart):
     data = (np.ones(64, dtype=np.int16) * 4096).tobytes()
     heart.process_audio(data)
     assert heart._get_level() > 0
+
+
+class TestRedrawIsNotRepeated:
+    """The heart pattern is static, so it must not be re-flushed every frame."""
+
+    async def test_pattern_is_flushed_once_not_per_frame(self, heart):
+        await heart.start()
+        heart.process_audio(pcm([8000] * 64))
+        await asyncio.sleep(0.08)  # ~80 frames at fps=1000
+        await heart.stop()
+
+        # One initial draw. The periodic refresh defaults to 5s, far longer
+        # than this test runs, so nothing else should have been pushed.
+        assert heart.device.displays == 1
+
+    async def test_steady_level_stops_writing_contrast(self, heart):
+        await heart.start()
+        heart.process_audio(pcm([9000] * 64))
+        await asyncio.sleep(0.05)  # let the EMA converge
+        settled = len(heart.device.contrasts)
+
+        await asyncio.sleep(0.05)  # another ~50 frames at the same level
+        after = len(heart.device.contrasts)
+        await heart.stop()
+
+        assert after == settled, (
+            "a constant audio level must produce no further SPI writes; "
+            f"{after - settled} extra contrast writes were made"
+        )
+
+    async def test_changing_level_still_writes(self, heart):
+        await heart.start()
+        heart.process_audio(pcm([0] * 64))
+        await asyncio.sleep(0.05)
+        before = len(heart.device.contrasts)
+
+        heart.process_audio(pcm([32000] * 64))
+        await asyncio.sleep(0.05)
+        after = len(heart.device.contrasts)
+        await heart.stop()
+
+        assert after > before, "brightness changes must still reach the device"
+
+    async def test_no_duplicate_consecutive_contrast_values(self, heart):
+        await heart.start()
+        heart.process_audio(pcm([12000] * 64))
+        await asyncio.sleep(0.1)
+        await heart.stop()
+
+        # The final 0 written by stop() may legitimately repeat a prior value,
+        # so compare only the values written by the render loop.
+        written = heart.device.contrasts[:-1]
+        duplicates = [
+            (a, b) for a, b in zip(written, written[1:], strict=False) if a == b
+        ]
+        assert duplicates == [], f"redundant repeated writes: {duplicates[:5]}"
+
+    async def test_periodic_refresh_redraws_the_pattern(self, fake_hardware):
+        """A slow redraw guards against the display losing state."""
+        heart = Max7219AmplitudeHeart(fps=1000, refresh_secs=0.02)
+        await heart.start()
+        await asyncio.sleep(0.09)
+        await heart.stop()
+
+        assert heart.device.displays > 1
+
+    async def test_refresh_can_be_disabled(self, fake_hardware):
+        heart = Max7219AmplitudeHeart(fps=1000, refresh_secs=0)
+        await heart.start()
+        await asyncio.sleep(0.06)
+        await heart.stop()
+
+        assert heart.device.displays == 1
