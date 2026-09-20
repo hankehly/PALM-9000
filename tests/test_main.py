@@ -203,7 +203,7 @@ class TestWorkerRegistrationRegression:
 
     async def test_source_awaits_add_workers(self):
         """A non-awaited call would leave a dangling coroutine and connect to nothing."""
-        source = inspect.getsource(main_module._run_pipeline)
+        source = inspect.getsource(main_module.run_pipeline)
         assert "await runner.add_workers(" in source
 
 
@@ -392,3 +392,117 @@ class TestHeartIsNeverLeft0n:
         await main_module.main()
         heart = FakeHeart.instances[0]
         assert (heart.started, heart.stopped) == (1, 1)
+
+
+class TestBuildersInIsolation:
+    """The builders are testable without faking the whole module.
+
+    Before the extraction, asserting anything about the pipeline meant
+    monkeypatching eight module attributes and calling main().
+    """
+
+    def test_build_transport_audio_params(self, monkeypatch):
+        captured = {}
+
+        def fake_transport(params):
+            captured["params"] = params
+            return "TRANSPORT"
+
+        monkeypatch.setattr(main_module, "LocalAudioTransport", fake_transport)
+
+        assert main_module.build_transport() == "TRANSPORT"
+        params = captured["params"]
+        assert params.audio_in_sample_rate == main_module.AUDIO_IN_SAMPLE_RATE
+        assert params.audio_out_sample_rate == main_module.AUDIO_OUT_SAMPLE_RATE
+        assert params.audio_out_10ms_chunks == main_module.AUDIO_OUT_10MS_CHUNKS
+        assert params.audio_in_enabled is True
+        assert params.audio_out_enabled is True
+
+    def test_build_llm_uses_settings_and_the_modern_kwargs(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(
+            main_module,
+            "GeminiLiveLLMService",
+            lambda **kw: captured.update(kw) or "LLM",
+        )
+
+        assert main_module.build_llm() == "LLM"
+        assert "model" not in captured  # deprecated, removed in pipecat 2.0
+        assert "voice_id" not in captured
+        assert "params" not in captured
+        assert captured["settings"].model == main_module.app_settings.gemini_live_model
+        assert captured["settings"].language is main_module.Language.JA
+
+    def test_build_pipeline_order(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(
+            main_module,
+            "Pipeline",
+            lambda processors: captured.setdefault("p", processors),
+        )
+
+        transport = MagicMock()
+        transport.input.return_value = "IN"
+        transport.output.return_value = "OUT"
+        aggregators = MagicMock()
+        aggregators.user.return_value = "AGG_USER"
+        aggregators.assistant.return_value = "AGG_ASSISTANT"
+
+        main_module.build_pipeline(
+            transport=transport,
+            llm="LLM",
+            context_aggregator=aggregators,
+            recording_control="CTL",
+            audio_buffer="BUF",
+        )
+
+        assert captured["p"] == [
+            "IN",
+            "AGG_USER",
+            "LLM",
+            "OUT",
+            "CTL",
+            "BUF",
+            "AGG_ASSISTANT",
+        ]
+
+    def test_build_pipeline_keeps_the_user_aggregator_upstream_of_the_llm(
+        self, monkeypatch
+    ):
+        """Regression guard: the realtime gate depends on this ordering."""
+        captured = {}
+        monkeypatch.setattr(
+            main_module,
+            "Pipeline",
+            lambda processors: captured.setdefault("p", processors),
+        )
+        transport = MagicMock()
+        transport.input.return_value = "IN"
+        transport.output.return_value = "OUT"
+        aggregators = MagicMock()
+        aggregators.user.return_value = "AGG_USER"
+        aggregators.assistant.return_value = "AGG_ASSISTANT"
+
+        main_module.build_pipeline(
+            transport=transport,
+            llm="LLM",
+            context_aggregator=aggregators,
+            recording_control="CTL",
+            audio_buffer="BUF",
+        )
+
+        order = captured["p"]
+        assert order.index("AGG_USER") < order.index("LLM")
+        assert order.index("OUT") < order.index("CTL")
+
+
+class TestNamedConstants:
+    def test_audio_buffer_size_matches_the_documented_rate(self):
+        """512 bytes at 24kHz mono int16 is ~10.7ms, so ~94 callbacks/sec."""
+        ms = (
+            main_module.AUDIO_BUFFER_SIZE / 2 / main_module.AUDIO_OUT_SAMPLE_RATE * 1000
+        )
+        assert 10 < ms < 11
+
+    def test_idle_timeout_is_ten_minutes(self):
+        assert main_module.IDLE_TIMEOUT_SECS == 600

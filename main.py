@@ -26,6 +26,17 @@ from palm_9000.settings import settings as app_settings
 
 IDLE_TIMEOUT_SECS = 10 * 60
 
+# Gemini Live streams 16 kHz in and 24 kHz out.
+AUDIO_IN_SAMPLE_RATE = 16000
+AUDIO_OUT_SAMPLE_RATE = 24000
+
+# ~80 ms of output buffering. Drop to 6 for lower latency, raise to 10-12 if
+# the Pi underruns.
+AUDIO_OUT_10MS_CHUNKS = 8
+
+# 512 bytes is ~10.7 ms at 24 kHz mono int16, so on_audio_data fires ~94x/sec.
+AUDIO_BUFFER_SIZE = 512
+
 SYSTEM_INSTRUCTION = (
     "You are PALM-9000, a self-aware houseplant powered by an advanced AI. "
     "You speak in layman's terms with an eerie quality, "
@@ -35,66 +46,28 @@ SYSTEM_INSTRUCTION = (
 )
 
 
-async def main():
-    # The heart is held open for the whole run. Everything that can fail --
-    # building the transport, reaching Gemini, starting the pipeline -- happens
-    # inside the `async with`, so the matrix is never left lit by a failure
-    # during startup.
-    async with Max7219AmplitudeHeart(min_brightness=0) as heart:
-        await _run_pipeline(heart)
-
-
-async def _run_pipeline(heart: Max7219AmplitudeHeart) -> None:
-    # Initialize audio processing components
-    audio_buffer = AudioBufferProcessor(buffer_size=512)
-
-    @audio_buffer.event_handler("on_audio_data")
-    async def on_audio_data(buffer, audio: bytes, sample_rate: int, num_channels: int):
-        heart.process_audio(audio)
-        # Fires ~94x/sec at buffer_size=512; keep off the default INFO level.
-        logger.debug(f"Received audio data: {len(audio)} bytes")
-
-    audio_recording_control_processor = AudioRecordingControlProcessor(audio_buffer)
-
-    # Initialize pipeline
-    transport = LocalAudioTransport(
+def build_transport() -> LocalAudioTransport:
+    """Local microphone in, local speaker out."""
+    return LocalAudioTransport(
         params=LocalAudioTransportParams(
             audio_in_enabled=True,
             audio_in_channels=1,
-            audio_in_sample_rate=16000,
+            audio_in_sample_rate=AUDIO_IN_SAMPLE_RATE,
             audio_out_enabled=True,
             audio_out_channels=1,
-            audio_out_sample_rate=24000,
-            # 8 (≈80 ms buffer; try 6 for lower latency or 10–12 if underruns persist)
-            audio_out_10ms_chunks=8,
-            # Needs: from pipecat.audio.vad.silero import SileroVADAnalyzer
-            # vad_analyzer=SileroVADAnalyzer(),
+            audio_out_sample_rate=AUDIO_OUT_SAMPLE_RATE,
+            audio_out_10ms_chunks=AUDIO_OUT_10MS_CHUNKS,
         )
     )
 
-    # Cascaded STT -> LLM -> TTS path, kept as an alternative to the Live API.
-    # Still valid in pipecat 1.x, except that GoogleLLMContext was removed --
-    # the replacement is LLMContext from pipecat.processors.aggregators.llm_context
-    # plus LLMContextAggregatorPair from ...aggregators.llm_response_universal.
-    #
-    # Needs: from pipecat.services.google.llm import GoogleLLMService
-    #        from pipecat.services.google.stt import GoogleSTTService
-    #        from pipecat.services.google.tts import GoogleTTSService
-    #
-    # stt = GoogleSTTService(
-    #     params=GoogleSTTService.InputParams(languages=[Language.JA])
-    # )
-    # llm = GoogleLLMService(
-    #     api_key=app_settings.google_api_key.get_secret_value(),
-    #     model="gemini-2.0-flash",
-    #     system_instruction=SYSTEM_INSTRUCTION,
-    # )
-    # tts = GoogleTTSService(
-    #     voice_id="ja-JP-Chirp3-HD-Charon",
-    #     params=GoogleTTSService.InputParams(language=Language.JA),
-    # )
 
-    llm = GeminiLiveLLMService(
+def build_llm() -> GeminiLiveLLMService:
+    """The Gemini Live service, configured from settings.
+
+    Note the `settings=` object: the older `model=` / `voice_id=` / `params=`
+    keyword arguments are deprecated and disappear in pipecat 2.0.
+    """
+    return GeminiLiveLLMService(
         api_key=app_settings.google_api_key.get_secret_value(),
         system_instruction=SYSTEM_INSTRUCTION,
         settings=GeminiLiveLLMSettings(
@@ -104,28 +77,59 @@ async def _run_pipeline(heart: Max7219AmplitudeHeart) -> None:
         ),
     )
 
-    # The context aggregators are REQUIRED, even though nothing here needs
-    # conversation history. GeminiLiveLLMService gates outgoing audio behind
-    # _ready_for_realtime_input, which only flips to True once an
-    # LLMContextFrame reaches the service. Without them (and without the
-    # LLMRunFrame kickoff below) every user audio frame is silently dropped
-    # and the bot never responds. This gate did not exist in pipecat 0.0.84,
-    # which is why the pre-1.x version of this file worked without a context.
-    context = LLMContext()
-    context_aggregator = LLMContextAggregatorPair(context)
 
-    pipeline = Pipeline(
+def build_pipeline(
+    transport: LocalAudioTransport,
+    llm: GeminiLiveLLMService,
+    context_aggregator: LLMContextAggregatorPair,
+    recording_control: AudioRecordingControlProcessor,
+    audio_buffer: AudioBufferProcessor,
+) -> Pipeline:
+    """Assemble the processor chain. Order is load-bearing.
+
+    The context aggregators are REQUIRED even though nothing here needs
+    conversation history. GeminiLiveLLMService gates outgoing audio behind
+    `_ready_for_realtime_input`, which only flips to True once an
+    LLMContextFrame reaches the service. Without them -- and without the
+    LLMRunFrame kickoff in run_pipeline() -- every frame of user audio is
+    silently discarded and the bot never answers. This gate did not exist in
+    pipecat 0.0.84, which is why the pre-1.x version worked without a context.
+
+    recording_control and audio_buffer sit after transport.output() because
+    they react to bot-speaking frames, which originate downstream. That is
+    also why the buffer only ever sees bot audio, never the user's.
+    """
+    return Pipeline(
         [
             transport.input(),
-            # stt,
             context_aggregator.user(),
             llm,
-            # tts,
             transport.output(),
-            audio_recording_control_processor,
+            recording_control,
             audio_buffer,
             context_aggregator.assistant(),
         ]
+    )
+
+
+async def run_pipeline(heart: Max7219AmplitudeHeart) -> None:
+    """Build everything and run until the pipeline ends or is cancelled."""
+    audio_buffer = AudioBufferProcessor(buffer_size=AUDIO_BUFFER_SIZE)
+
+    @audio_buffer.event_handler("on_audio_data")
+    async def on_audio_data(buffer, audio: bytes, sample_rate: int, num_channels: int):
+        heart.process_audio(audio)
+        # Fires ~94x/sec; keep it off the default INFO level.
+        logger.debug(f"Received audio data: {len(audio)} bytes")
+
+    context_aggregator = LLMContextAggregatorPair(LLMContext())
+
+    pipeline = build_pipeline(
+        transport=build_transport(),
+        llm=build_llm(),
+        context_aggregator=context_aggregator,
+        recording_control=AudioRecordingControlProcessor(audio_buffer),
+        audio_buffer=audio_buffer,
     )
 
     task = PipelineWorker(
@@ -140,7 +144,7 @@ async def _run_pipeline(heart: Max7219AmplitudeHeart) -> None:
         # itself; this handler only records why the run ended.
         logger.info(f"No activity for {IDLE_TIMEOUT_SECS}s - cancelling pipeline")
 
-    # Opens the realtime input gate (see the context aggregator note above).
+    # Opens the realtime input gate (see build_pipeline's docstring).
     await task.queue_frames([LLMRunFrame()])
 
     try:
@@ -153,6 +157,15 @@ async def _run_pipeline(heart: Max7219AmplitudeHeart) -> None:
         logger.exception("Pipeline error")
     finally:
         logger.info("Shutting down...")
+
+
+async def main():
+    # The heart is held open for the whole run. Everything that can fail --
+    # building the transport, reaching Gemini, starting the pipeline -- happens
+    # inside the `async with`, so the matrix is never left lit by a failure
+    # during startup.
+    async with Max7219AmplitudeHeart(min_brightness=0) as heart:
+        await run_pipeline(heart)
 
 
 if __name__ == "__main__":
