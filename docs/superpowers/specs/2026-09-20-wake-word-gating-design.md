@@ -134,8 +134,30 @@ LLMContextAggregatorPair(
 )
 ```
 
-Silero ships with `pipecat[silero]`, so this adds nothing, and it silences the
-long-standing startup warning.
+Attach it **only when gating is enabled**. Silero ships with
+`pipecat[silero]`, so it costs no dependency, but it is not otherwise free.
+
+> **Corrected during implementation.** This section originally claimed the
+> analyzer "adds nothing, and it silences the long-standing startup warning."
+> Both halves were wrong, and both made attaching it unconditionally look
+> harmless:
+>
+> - **It adds an interruption path.** A `vad_analyzer` is what constructs
+>   pipecat's `VADController` at all (`llm_response_universal.py:756`); with
+>   `None`, the default `VADUserTurnStartStrategy` is inert. Once live, every
+>   detected turn start broadcasts an interruption (`:1327-1329`), which
+>   `GeminiLiveLLMService` turns into a `TTSStoppedFrame`
+>   (`gemini_live/llm.py:1036-1037`, `:960-966`). With gating off — where
+>   nothing needs the signal — imperfect echo cancellation would then let the
+>   bot interrupt itself, a failure that did not exist before this feature.
+> - **It does not silence the warning.** `service_metadata_frame()` hardcodes
+>   `emits_turn_frames=False` (`gemini_live/llm.py:441`) and never inspects
+>   the aggregator, so the warning fires either way. Its text merely
+>   *suggests* a `vad_analyzer` as a remedy.
+>
+> So the only true reason to attach it is the one that survives: the gate's
+> silence timer needs an activity signal. That reason applies only when there
+> is a gate, which is why it is now conditional on `wake_word_enabled`.
 
 An earlier draft proposed computing RMS locally. Rejected on review: it would
 have reinvented turn detection badly, resetting the timer on any background
@@ -222,8 +244,11 @@ author of this spec once already.
   feature removes.
 - **Detector raises mid-stream:** log via `logger.exception` and stay asleep.
   Failing closed keeps audio off the wire.
-- **Disabled:** `main.py` omits the processor and constructs the service
-  without `start_audio_paused`, leaving today's behaviour unchanged.
+- **Disabled:** `main.py` omits the processor, constructs the service
+  without `start_audio_paused`, and builds the aggregators with no
+  `user_params` — leaving today's behaviour unchanged. "Unchanged" is
+  literal: the disabled path must match the pre-feature construction
+  exactly, which is what the VAD correction above enforces.
 
 ## Testing
 
