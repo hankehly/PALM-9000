@@ -30,7 +30,45 @@ Verify that the device exists.
 ls /dev/spi*
 ```
 
-## 3. Connect the OTG USB Cable and USB Audio Adapter
+## 3. Connect the MAX7219 LED Matrix
+
+PALM-9000's "heartbeat" is an 8x8 MAX7219 dot matrix whose brightness tracks the bot's speech amplitude. `Max7219AmplitudeHeart` opens `spi(port=0, device=0)` with `cascaded=1`, so the module must be wired to **SPI0 / CE0** as a single 8x8 unit.
+
+Power the Pi down before wiring.
+```sh
+sudo shutdown -h now
+```
+
+| MAX7219 pin | Pi physical pin | Signal |
+| ----------- | --------------- | ------------------ |
+| VCC         | 2 (or 4)        | 5V                 |
+| GND         | 20 (or 25)      | Ground             |
+| DIN         | 19              | GPIO10 / SPI0 MOSI |
+| CS          | 24              | GPIO8 / SPI0 CE0   |
+| CLK         | 23              | GPIO11 / SPI0 SCLK |
+
+Notes:
+- Use **5V, not 3.3V**. The MAX7219 is dim and unreliable at 3.3V. At 5V its datasheet wants V_IH >= 3.5V on DIN/CS/CLK while the Pi drives 3.3V, which is technically out of spec but works on typical breakout modules. Suspect this first if the display flickers after the wiring is confirmed correct.
+- **Don't use pin 6 for ground** -- the INMP441 microphone uses it. Pin 20 sits directly across from MOSI on pin 19, which keeps the bundle tidy.
+- MISO is unused; the MAX7219 is write-only.
+- The `pi` user must be in the `spi` group (check with `id`) to open `/dev/spidev0.0` without root.
+
+Confirm the matrix lights up. A solid heart should glow for five seconds, then go dark.
+```sh
+uv run --no-dev python -c "
+import asyncio
+from palm_9000.gpio import Max7219AmplitudeHeart
+async def main():
+    heart = Max7219AmplitudeHeart(min_brightness=0)
+    await heart.start()
+    heart._set_level(1.0); heart._env = 1.0
+    await asyncio.sleep(5)
+    await heart.stop()
+asyncio.run(main())
+"
+```
+
+## 4. Connect the OTG USB Cable and USB Audio Adapter
 
 Hook a USB OTG cable to the Pi Zero's USB port, then connect a USB audio adapter to the OTG cable. For this project, I used a [UGREEN 10396](https://www.amazon.co.jp/dp/B00LN3LQKQ) and [ALLVD B0CC519BSM](https://www.amazon.co.jp/dp/B0CC519BSM).
 
@@ -44,7 +82,7 @@ Do a quick test to confirm sound output. The `-D plughw:1,0` option specifies ca
 speaker-test -c 2 -t wav -l 1 -D plughw:1,0
 ```
 
-## 4. Connect the INMP441 Microphone
+## 5. Connect the INMP441 Microphone
 
 ![GPIO INMP441 Pinout Diagram](images/GPIO-INMP441-Pinout-Diagram.png)
 
@@ -78,7 +116,7 @@ Play back the test sample.
 aplay -D plughw:1,0 test.wav
 ```
 
-## 5. Enable Acoustic Echo Cancellation (AEC)
+## 6. Enable Acoustic Echo Cancellation (AEC)
 
 Without Acoustic Echo Cancellation (AEC), speaker output may be picked up as microphone input, causing a feedback loop where the agent hears its own output and responds to itself. Raspberry Pi's sound server PulseAudio can be configured to use AEC to reduce echo from the speaker when using a microphone.
 
