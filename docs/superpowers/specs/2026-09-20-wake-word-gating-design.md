@@ -80,25 +80,34 @@ Verified empirically rather than assumed:
 
 Input is 16 kHz int16 — exactly what the transport already produces.
 
-### English wake word now, Japanese later
+### Pretrained model now, custom Japanese model later
 
-Ship with openWakeWord's pretrained `hey_jarvis_v0.1.onnx`. `alexa` was
-rejected to avoid triggering real devices.
+Ship with livekit-wakeword's own pretrained **`hey_livekit.onnx`** (953 KB).
+Verified: it loads and scores `0.0` on both silence and white noise, so it
+rejects non-speech cleanly.
 
-The intended wake word is 「へい やっし」 — *hey yashi*, ヤシ being Japanese for
-palm tree. livekit-wakeword can train it: set `tts_backend: voxcpm` and
-`target_phrases`, then train off-device and drop the resulting `.onnx` in.
-Because that is the same file slot and the same runtime call, it is a
-configuration change, not a rewrite.
+It is fetched from the `livekit-examples/hello-wakeword` repository rather
+than bundled in the wheel, so it is committed here like any other asset.
 
-Deferred rather than done now because the project documents that
-*"multilingual models currently achieve lower accuracy than English models"* —
-the frozen speech embedding is English-dominant and VoxCPM produces less
-diverse synthetic speech than Piper. Training time and hardware are
-unspecified upstream. Gating is worth having before that is worked out.
+openWakeWord's `hey_jarvis_v0.1.onnx` is an equally valid drop-in — verified
+loadable by the same runtime — and has a closer cadence to the eventual
+Japanese phrase, which may ease the eventual switch. Changing between them is
+one setting. `alexa` was rejected to avoid triggering real devices.
 
 **Consequence to accept meanwhile:** you say an English phrase, then speak
 Japanese.
+
+The intended wake word is 「へい やっし」 — *hey yashi*, ヤシ being Japanese for
+palm tree. Training it is **a separate task**, not part of this work: set
+`tts_backend: voxcpm` and `target_phrases`, train off-device, drop the
+resulting `.onnx` into the same slot. Same file path, same runtime call, so it
+is a configuration change rather than a rewrite.
+
+Deferred because the project documents that *"multilingual models currently
+achieve lower accuracy than English models"* — the frozen speech embedding is
+English-dominant and VoxCPM produces less diverse synthetic speech than Piper.
+Training time and hardware are unspecified upstream. Gating is worth having
+before that is worked out.
 
 ### Silence timeout for re-arming
 
@@ -179,15 +188,15 @@ the gate fails to run.
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `wake_word_enabled` | `False` | Master switch; off changes nothing |
-| `wake_word_model_path` | `models/wakeword/hey_jarvis_v0.1.onnx` | Classifier |
+| `wake_word_model_path` | `models/wakeword/hey_livekit.onnx` | Classifier |
 | `wake_word_threshold` | `0.5` | Score above which to wake |
 | `wake_silence_timeout_secs` | `30.0` | Re-arm after this much quiet |
 
 ### Model file
 
-One file, `models/wakeword/hey_jarvis_v0.1.onnx` (1.27 MB), committed. The
-feature extractors come from the wheel, so nothing else ships and nothing is
-fetched at runtime.
+One file, `models/wakeword/hey_livekit.onnx` (953 KB), committed. The feature
+extractors come from the wheel, so nothing else ships and nothing is fetched
+at runtime.
 
 Two `.gitignore` rules currently exclude it, and `models/*` matches first.
 Because git will not re-include a file whose parent directory is excluded, the
@@ -220,8 +229,9 @@ author of this spec once already.
 
 - `LiveKitWakeWordDetector` against a fake `WakeWordModel`: byte-to-array
   conversion, score reduction, reset.
-- Detector against the **real committed model**: silence scores low, and a
-  synthetic burst does not false-trigger. Keeps the wiring honest.
+- Detector against the **real committed model**: silence and white noise both
+  score 0.0 (verified during design), so neither false-triggers. Keeps the
+  ONNX wiring honest rather than only exercising a stub.
 - `WakeWordGate` like `AudioRecordingControlProcessor`: assertions on
   `set_audio_input_paused` calls, on the deadline resetting for each of the
   four activity frames, and on every frame being forwarded.
@@ -248,5 +258,6 @@ author of this spec once already.
 ## Out of scope
 
 - The systemd unit and always-on operation. This is its prerequisite.
-- Training the Japanese 「へい やっし」 model (follow-up; same file slot).
+- Training the Japanese 「へい やっし」 model. Tracked as a separate task; it
+  drops into the same file slot with no code change.
 - Any change to conversation behaviour once awake.
