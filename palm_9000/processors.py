@@ -25,7 +25,9 @@ class AudioRecordingControlProcessor(FrameProcessor):
 
         if isinstance(frame, BotStartedSpeakingFrame):
             await self._audio_buffer.start_recording()
-        elif isinstance(frame, (BotStoppedSpeakingFrame, CancelFrame, EndFrame, ErrorFrame)):
+        elif isinstance(
+            frame, (BotStoppedSpeakingFrame, CancelFrame, EndFrame, ErrorFrame)
+        ):
             await self._audio_buffer.stop_recording()
 
         await self.push_frame(frame, direction)

@@ -11,3 +11,7 @@ __pycache__
 *.onnx
 *.json
 chroma_db
+.coverage
+coverage.xml
+htmlcov
+.pytest_cache
