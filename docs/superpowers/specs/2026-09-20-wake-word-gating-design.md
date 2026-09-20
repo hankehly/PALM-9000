@@ -23,6 +23,12 @@ restart policy.
 **Goal:** no microphone audio leaves the Pi until a wake word is detected
 locally, and audio stops flowing again shortly after the conversation ends.
 
+The cost is not only privacy. Live API audio input is billed per token, quoted
+at roughly $0.005/min. Streaming continuously is therefore about $0.30/hour —
+on the order of **$216/month to listen to an empty room**. Gating reduces that
+to the minutes actually spent in conversation. (Rates change; check current
+pricing before relying on the figure.)
+
 ## Decisions
 
 Each was settled against measurements or library constraints, not preference.
@@ -52,6 +58,13 @@ that caused the silent-audio-drop bug — or rebuild the pipeline per wake.
 **Accepted trade-off:** a websocket to Google stays open while asleep. No
 audio crosses it. Gemini Live sessions have server-side duration limits, so
 pipecat will reconnect periodically on its own.
+
+Holding that session open costs nothing. The service has no keepalive, ping or
+heartbeat path — its only senders are `_send_user_audio` (which returns early
+while paused), `_send_user_text` and `_send_user_video`, and the latter two are
+never called here. The Live API is billed per token, with no charge for
+connection duration or idle sessions. The open socket is therefore a privacy
+consideration, not a financial one.
 
 ### openWakeWord models, run directly on onnxruntime
 
