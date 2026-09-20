@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from pipecat.frames.frames import (
+    BotSpeakingFrame,
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
     CancelFrame,
@@ -9,6 +10,7 @@ from pipecat.frames.frames import (
     ErrorFrame,
     InputAudioRawFrame,
     TextFrame,
+    UserSpeakingFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
 )
@@ -249,10 +251,19 @@ class TestWakeWordGate:
         [
             UserStartedSpeakingFrame(),
             UserStoppedSpeakingFrame(),
+            UserSpeakingFrame(),
             BotStartedSpeakingFrame(),
             BotStoppedSpeakingFrame(),
+            BotSpeakingFrame(),
         ],
-        ids=["user_start", "user_stop", "bot_start", "bot_stop"],
+        ids=[
+            "user_start",
+            "user_stop",
+            "user_speaking",
+            "bot_start",
+            "bot_stop",
+            "bot_speaking",
+        ],
     )
     async def test_activity_frames_reset_the_deadline(self, clock, frame):
         """Activity frames reset the silence deadline.
@@ -271,6 +282,35 @@ class TestWakeWordGate:
         await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
 
         assert llm.paused_calls == [False], "deadline was not reset by activity"
+
+    async def test_a_long_bot_reply_does_not_trip_the_timeout(self, clock):
+        """A 45s answer must not put the gate to sleep mid-sentence.
+
+        BotStartedSpeakingFrame alone only sets the deadline once, at t=0.
+        Without the periodic BotSpeakingFrame also resetting it, a reply
+        longer than silence_timeout_secs trips _sleep() while the bot is
+        still audibly talking. Confirms both that a long reply survives and
+        that the timeout still fires once activity genuinely stops - so this
+        cannot pass by simply breaking the timeout.
+        """
+        detector, llm = FakeDetector([0.9]), FakeLLM()
+        gate = make_gate(detector, llm, clock)
+        await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)  # wake
+
+        await gate.process_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+        for _ in range(4):  # BotSpeakingFrame every 10s out to 40s
+            clock.advance(10.0)
+            await gate.process_frame(BotSpeakingFrame(), FrameDirection.UPSTREAM)
+            await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+        clock.advance(5.0)  # 45s total
+        await gate.process_frame(BotStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
+
+        assert llm.paused_calls == [False], "woke once and must not have slept"
+
+        clock.advance(31.0)
+        await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+
+        assert llm.paused_calls == [False, True], "must still sleep once truly idle"
 
     async def test_every_frame_is_forwarded(self, clock):
         detector, llm = FakeDetector([0.9]), FakeLLM()

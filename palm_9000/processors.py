@@ -2,6 +2,7 @@ import time
 
 from loguru import logger
 from pipecat.frames.frames import (
+    BotSpeakingFrame,
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
     CancelFrame,
@@ -9,6 +10,7 @@ from pipecat.frames.frames import (
     ErrorFrame,
     Frame,
     InputAudioRawFrame,
+    UserSpeakingFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
 )
@@ -47,11 +49,18 @@ class WakeWordGate(FrameProcessor):
     unpausing the service is the sole side effect.
     """
 
+    # Start/stop frames alone leave a gap: nothing arrives between them, so a
+    # long turn never refreshes the deadline. BotSpeakingFrame and
+    # UserSpeakingFrame are broadcast periodically *during* speech (every
+    # ~0.2s - see pipecat's base_output.py and vad_controller.py) and close
+    # that gap.
     _ACTIVITY_FRAMES = (
         UserStartedSpeakingFrame,
         UserStoppedSpeakingFrame,
+        UserSpeakingFrame,
         BotStartedSpeakingFrame,
         BotStoppedSpeakingFrame,
+        BotSpeakingFrame,
     )
 
     def __init__(
