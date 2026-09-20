@@ -1,7 +1,6 @@
 import asyncio
 
 from loguru import logger
-from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineWorker
@@ -121,9 +120,17 @@ def build_context_aggregator() -> LLMContextAggregatorPair:
     GeminiLiveLLMService turns into a TTSStoppedFrame. Attaching it
     unconditionally would let imperfect echo cancellation make the bot
     interrupt itself -- a failure that does not exist with gating off.
+
+    The import is deferred for the same reason: SileroVADAnalyzer pulls in
+    onnxruntime, which costs ~13 MB of RSS at import time on a Pi with
+    416 MB. With gating off nothing here needs it, and the disabled path is
+    meant to be unchanged in footprint as well as behaviour.
     """
     if not get_settings().wake_word_enabled:
         return LLMContextAggregatorPair(LLMContext())
+
+    from pipecat.audio.vad.silero import SileroVADAnalyzer
+
     return LLMContextAggregatorPair(
         LLMContext(),
         user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
@@ -153,7 +160,7 @@ def build_pipeline(
     also why the buffer only ever sees bot audio, never the user's.
 
     The wake gate, when present, sits first -- upstream of every processor
-    that emits the four frames its silence timer resets on. Those frames
+    that emits the six frames its silence timer resets on. Those frames
     all originate downstream of it and reach it only as the upstream copy
     of a broadcast, so moving the gate below context_aggregator.user()
     means it stops seeing them: the deadline never resets and the plant
