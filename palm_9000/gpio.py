@@ -127,15 +127,20 @@ class Max7219AmplitudeHeart:
         try:
             await asyncio.wait_for(self._task, timeout=0.5)
         except TimeoutError:
-            # wait_for has already cancelled the task; this just drains it.
-            # A task that fails *during* cancellation surfaces from wait_for
-            # as that exception rather than TimeoutError, so it lands in the
-            # handler below, not here.
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
+            # Two very different things land here, because TimeoutError
+            # subclasses OSError: the render loop overran its grace period,
+            # or the loop itself raised TimeoutError (an SPI or socket read
+            # timing out). task.cancelled() tells them apart -- wait_for
+            # cancels the task on a real timeout.
+            #
+            # Never re-await the task in either case. It is already finished,
+            # and re-awaiting re-raises its exception past these handlers and
+            # out of stop(), which would mask whatever the caller was
+            # unwinding.
+            if self._task.cancelled():
+                logger.debug("Render task did not stop within the grace period")
+            else:
+                logger.exception("Render task failed")
         # CancelledError derives from BaseException, not Exception, so a
         # cancellation of stop() itself still propagates past this handler.
         except Exception:

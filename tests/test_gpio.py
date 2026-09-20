@@ -645,17 +645,77 @@ class TestStopDoesNotMaskTheRealError:
         # so this lands in stop()'s general handler.
         assert any("render task failed" in m.lower() for m in records), records
 
-    async def test_cancelling_stop_itself_still_propagates(self, fake_hardware):
-        """CancelledError is a BaseException, so it must pass through."""
+    async def test_a_render_task_raising_timeouterror_is_also_contained(
+        self, fake_hardware, monkeypatch
+    ):
+        """TimeoutError from the task must not be mistaken for a real timeout.
+
+        TimeoutError subclasses OSError, so an SPI or socket timeout inside
+        the render loop surfaces from wait_for looking exactly like the grace
+        period expiring. Re-awaiting the task then re-raised it past both
+        handlers and out of stop().
+        """
+        records = []
+        monkeypatch.setattr(
+            gpio_module.logger, "exception", lambda msg, *a, **kw: records.append(msg)
+        )
+
         heart = Max7219AmplitudeHeart(fps=1000)
         await heart.start()
 
-        async def never():
+        async def times_out():
+            raise TimeoutError("SPI read timed out")
+
+        heart._task = asyncio.create_task(times_out())
+        await asyncio.sleep(0.01)
+
+        await heart.stop()  # must not raise
+
+        assert heart._task is None
+        assert records, "the TimeoutError vanished without a trace"
+
+    async def test_task_timeouterror_does_not_replace_the_body_error(
+        self, fake_hardware, monkeypatch
+    ):
+        heart = Max7219AmplitudeHeart(fps=1000)
+
+        async def times_out():
+            raise TimeoutError("SPI read timed out")
+
+        with pytest.raises(RuntimeError, match="the real problem"):
+            async with heart:
+                heart._task.cancel()
+                heart._task = asyncio.create_task(times_out())
+                await asyncio.sleep(0.01)
+                raise RuntimeError("the real problem")
+
+    async def test_cancelling_the_caller_of_stop_propagates(self, fake_hardware):
+        """Cancelling the task that is running stop() must still cancel it.
+
+        An earlier version of this test cancelled the *render* task rather
+        than a task executing stop(), so it never exercised the behaviour its
+        name claimed. CancelledError is a BaseException, so it passes through
+        stop()'s `except Exception` untouched.
+        """
+        heart = Max7219AmplitudeHeart(fps=1000)
+        await heart.start()
+
+        async def slow_to_stop():
+            # Outlasts the grace period, so stop() is genuinely blocked in
+            # wait_for at the moment we cancel it.
             await asyncio.sleep(30)
 
-        heart._task = asyncio.create_task(never())
-        heart._task.cancel()
-        await asyncio.sleep(0)
+        render_task = asyncio.create_task(slow_to_stop())
+        heart._task = render_task
+
+        stopping = asyncio.create_task(heart.stop())
+        await asyncio.sleep(0.01)  # let stop() reach wait_for
+        stopping.cancel()
 
         with pytest.raises(asyncio.CancelledError):
-            await heart.stop()
+            await stopping
+
+        # wait_for cancels the task it was awaiting when it is itself
+        # cancelled, so the render task should not be left running.
+        await asyncio.sleep(0)
+        assert render_task.cancelled() or render_task.done()
