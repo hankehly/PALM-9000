@@ -1,5 +1,6 @@
 import asyncio
 import threading
+import time
 
 import numpy as np
 from luma.core.interface.serial import noop, spi
@@ -66,10 +67,12 @@ class Max7219AmplitudeHeart:
         ema: float = 0.35,
         gamma: float = 2.2,
         channels: int = 1,
+        refresh_secs: float = 5.0,
     ) -> None:
-        # Display init
-        self.serial = spi(port=0, device=0, gpio=noop())
-        self.device = max7219(self.serial, cascaded=1)
+        # Hardware is opened by start(), not here, so this object can be
+        # constructed on a machine without SPI (spidev is Linux-only).
+        self.serial = None
+        self.device = None
 
         # Tuning
         self.fps = fps
@@ -78,6 +81,9 @@ class Max7219AmplitudeHeart:
         self.ema = ema  # smoothing (0..1), higher = snappier
         self.gamma = gamma  # perceptual correction
         self.channels = max(1, int(channels))
+        # How often to redraw the (static) heart as a guard against the
+        # display losing state. 0 disables the periodic redraw entirely.
+        self.refresh_secs = refresh_secs
 
         # State
         self._task: asyncio.Task | None = None
@@ -86,9 +92,16 @@ class Max7219AmplitudeHeart:
         self._level = 0.0  # latest raw level 0..1 (thread-safe)
         self._lock = threading.Lock()
 
+    def _open_device(self) -> None:
+        """Open the SPI bus and MAX7219. Idempotent; needs real hardware."""
+        if self.device is None:
+            self.serial = spi(port=0, device=0, gpio=noop())
+            self.device = max7219(self.serial, cascaded=1)
+
     async def start(self) -> None:
         if self._task and not self._task.done():
             return
+        self._open_device()
         self._stop_evt.clear()
         self._task = asyncio.create_task(self._run())
 
@@ -108,9 +121,10 @@ class Max7219AmplitudeHeart:
             self._task = None
             # turn off & clear
             try:
-                self.device.contrast(0)
-                if hasattr(self.device, "clear"):
-                    self.device.clear()
+                if self.device is not None:
+                    self.device.contrast(0)
+                    if hasattr(self.device, "clear"):
+                        self.device.clear()
             except Exception:
                 pass
 
@@ -191,13 +205,37 @@ class Max7219AmplitudeHeart:
                 draw.point((x, y), fill="white")
 
     async def _run(self) -> None:
+        """Track the audio envelope with the display's brightness.
+
+        The heart pattern never changes, so the framebuffer is pushed once
+        rather than every frame, and the intensity register is only written
+        when the computed brightness actually differs from what the device
+        already holds. A steady signal therefore produces no SPI traffic at
+        all, instead of ~90 full-frame flushes per second.
+
+        The envelope still advances every tick: the EMA is a filter over
+        time, so skipping the arithmetic would change the animation.
+        """
         period = 1.0 / float(self.fps)
+        last_brightness: int | None = None
+        last_redraw = 0.0
         try:
+            self._draw_heart()
+            last_redraw = time.monotonic()
+
             while not self._stop_evt.is_set():
-                lvl = self._get_level()
-                b = self._brightness_from_level(lvl)
-                self.device.contrast(b)
-                self._draw_heart()
+                brightness = self._brightness_from_level(self._get_level())
+                if brightness != last_brightness:
+                    self.device.contrast(brightness)
+                    last_brightness = brightness
+
+                # Cheap insurance against the display losing state: redraw
+                # the static pattern occasionally rather than never.
+                now = time.monotonic()
+                if self.refresh_secs and (now - last_redraw) >= self.refresh_secs:
+                    self._draw_heart()
+                    last_redraw = now
+
                 await asyncio.sleep(period)
         except asyncio.CancelledError:
             pass
