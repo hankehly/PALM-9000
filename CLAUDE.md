@@ -99,9 +99,10 @@ upload.
 
 **The wake gate's pipeline position is load-bearing.** `WakeWordGate`
 sits between `transport.input()` and `context_aggregator.user()`,
-upstream of every processor that emits the four frames its silence timer
+upstream of every processor that emits the six frames its silence timer
 resets on: `UserStartedSpeakingFrame`, `UserStoppedSpeakingFrame`,
-`BotStartedSpeakingFrame`, `BotStoppedSpeakingFrame`. All four come from
+`UserSpeakingFrame`, `BotStartedSpeakingFrame`, `BotStoppedSpeakingFrame`,
+`BotSpeakingFrame`. All six come from
 processors downstream of the gate — the user aggregator and the output
 transport — and both broadcast every frame in *both* directions: the
 aggregator via `FrameProcessor.broadcast_frame`
@@ -109,9 +110,56 @@ aggregator via `FrameProcessor.broadcast_frame`
 `llm_response_universal.py:1324,1410`; the output transport the same
 way by hand at `pipecat/transports/base_output.py:716-726,787-798`. The
 gate, upstream of both, only ever sees the upstream copy. Move it
-downstream of the aggregator and it stops seeing all four: the deadline
+downstream of the aggregator and it stops seeing all six: the deadline
 never resets, and the plant goes deaf 30 seconds into a conversation,
 with no error.
+
+**The *continuing* speech frames are load-bearing, not padding.**
+`_ACTIVITY_FRAMES` must include `BotSpeakingFrame` and
+`UserSpeakingFrame`, not only the start/stop pairs. Nothing arrives
+between a start and a stop, so with start/stop alone a 45-second bot
+reply trips the 30-second silence timeout *while the bot is audibly
+talking* — the log reads "No speech for 30.0s" over the sound of it
+speaking — and the `BotStoppedSpeakingFrame` that follows is ignored,
+because the deadline only refreshes while awake. The user's follow-up
+is then discarded and they have to say the wake word again. Both
+continuing frames broadcast about every 0.2s (`base_output.py:805` for
+the bot; `VADController.on_speech_activity` via the user aggregator).
+
+**The wake-word model is stateless; the detector holds the buffer.**
+`WakeWordModel.predict()` mels exactly the chunk you hand it and needs
+76 + 15×8 = 196 mel frames — about 2 seconds — in a *single* call
+(`livekit/wakeword/inference/model.py:96-145`). It accumulates nothing
+between calls. `LocalAudioTransport` pushes 20 ms frames (320 samples
+at 16 kHz, `pipecat/transports/local/audio.py:76`), so handing a frame
+straight to `predict()` raises `InvalidArgument: Invalid input shape:
+{320}` about fifty times a second and never scores anything. Shorter-
+but-valid chunks are worse: below ~2 s `predict()` returns **exactly
+0.0 for every possible input**, including a perfect wake word — which
+is why a test that only asserts "silence scores below the threshold"
+proves nothing at all. `LiveKitWakeWordDetector` therefore keeps its
+own 2-second rolling buffer and scores it on an 80 ms hop. `reset()`
+clears that buffer and keeps the model; dropping the model forces a
+full ONNX session rebuild on the next frame, which on a Pi is seconds
+of stall after every wake.
+
+**With gating on, local VAD can interrupt the bot.** The turn-start
+strategy defaults to `enable_interruptions=True`
+(`base_user_turn_start_strategy.py:56`), so echo leakage or a second
+person talking will cut a reply off mid-sentence without any wake word.
+This is accepted rather than fixed: there is no knob for it on
+`LLMUserAggregatorParams`, and suppressing it means pinning pipecat's
+whole default strategy list — the kind of coupling to internals that
+caused the silent-audio bug above. Barge-in is also often wanted. Watch
+for it when testing on device, at higher speaker volume and on longer
+replies.
+
+**With gating on, the 10-minute idle timeout effectively stops firing.**
+Local VAD emits `UserStartedSpeakingFrame` and `UserSpeakingFrame`,
+both in `PipelineWorker`'s default idle set (`worker.py:301-307`), so
+any room noise — a television, a conversation nearby — keeps resetting
+`IDLE_TIMEOUT_SECS`. Harmless, since nothing uploads while the gate is
+asleep, but do not rely on that timeout as a backstop when gating is on.
 
 **`vad_analyzer` is attached only when gating is on.** This is not a
 tidiness choice. A `vad_analyzer` is what constructs pipecat's
