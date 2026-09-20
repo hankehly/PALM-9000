@@ -224,6 +224,21 @@ Save your mixer state so it persists across reboots.
 sudo alsactl store
 ```
 
+# Deploy
+
+The repository is public and the Pi's remote uses HTTPS, so deploying needs no
+credentials on the device.
+
+```sh
+ssh raspberrypi-zero2w.local
+cd ~/Projects/PALM-9000
+git pull
+uv sync --no-dev
+```
+
+Installs take several minutes on a Pi Zero 2W. `.env` is gitignored and lives
+only on the Pi, so pulling never overwrites it.
+
 # Run
 
 ```sh
