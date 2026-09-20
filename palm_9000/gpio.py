@@ -143,6 +143,15 @@ class Max7219AmplitudeHeart:
             self._task = None
             self._blank()
 
+        # _run() swallows CancelledError so it can blank the display on its
+        # way out. That means a cancellation aimed at *this* coroutine gets
+        # absorbed: wait_for cancels _run, _run returns normally anyway, and
+        # wait_for hands back that result instead of propagating. Without
+        # this check the caller's cancellation would vanish silently.
+        current = asyncio.current_task()
+        if current is not None and current.cancelling():
+            raise asyncio.CancelledError()
+
     async def __aenter__(self) -> "Max7219AmplitudeHeart":
         """Start the display, guaranteeing stop() on the way out.
 
