@@ -96,7 +96,10 @@ def build_wake_gate(llm: GeminiLiveLLMService) -> WakeWordGate | None:
     if not settings.wake_word_enabled:
         return None
 
-    detector = LiveKitWakeWordDetector(settings.wake_word_model_path)
+    detector = LiveKitWakeWordDetector(
+        settings.wake_word_model_path,
+        hop_samples=settings.wake_word_hop_samples,
+    )
     detector.load()
     return WakeWordGate(
         detector=detector,

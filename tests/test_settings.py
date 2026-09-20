@@ -117,6 +117,7 @@ class TestWakeWordSettings:
         assert settings.wake_word_model_path == "models/wakeword/hey_livekit.onnx"
         assert settings.wake_word_threshold == 0.5
         assert settings.wake_silence_timeout_secs == 30.0
+        assert settings.wake_word_hop_samples == 1280
 
     def test_env_overrides(self, env):
         env.setenv("GOOGLE_API_KEY", "k")
@@ -124,6 +125,7 @@ class TestWakeWordSettings:
         env.setenv("WAKE_WORD_MODEL_PATH", "models/wakeword/other.onnx")
         env.setenv("WAKE_WORD_THRESHOLD", "0.8")
         env.setenv("WAKE_SILENCE_TIMEOUT_SECS", "12.5")
+        env.setenv("WAKE_WORD_HOP_SAMPLES", "2560")
 
         settings = Settings(_env_file=None)
 
@@ -131,3 +133,4 @@ class TestWakeWordSettings:
         assert settings.wake_word_model_path == "models/wakeword/other.onnx"
         assert settings.wake_word_threshold == 0.8
         assert settings.wake_silence_timeout_secs == 12.5
+        assert settings.wake_word_hop_samples == 2560

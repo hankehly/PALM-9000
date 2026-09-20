@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     wake_word_model_path: str = "models/wakeword/hey_livekit.onnx"
     wake_word_threshold: float = 0.5
     wake_silence_timeout_secs: float = 30.0
+    wake_word_hop_samples: int = 1280
 
     # Only needed by the cascaded GoogleSTTService / GoogleTTSService path,
     # not by the Gemini Live pipeline in main.py.

@@ -29,6 +29,7 @@ def _settings(**overrides):
         "wake_word_model_path": "models/wakeword/hey_livekit.onnx",
         "wake_word_threshold": 0.5,
         "wake_silence_timeout_secs": 30.0,
+        "wake_word_hop_samples": 1280,
     }
     base.update(overrides)
     return Settings(_env_file=None, **base)
@@ -615,8 +616,9 @@ class TestWakeWordWiring:
         )
 
         class FakeDetector:
-            def __init__(self, path):
+            def __init__(self, path, hop_samples=None):
                 self.path = path
+                self.hop_samples = hop_samples
                 self.loaded = False
 
             def load(self):
@@ -629,6 +631,31 @@ class TestWakeWordWiring:
         assert captured["silence_timeout_secs"] == 17.5
         assert captured["llm"] == "LLM"
 
+    def test_hop_samples_reaches_the_detector(self, monkeypatch):
+        """A non-default value, so hardcoding 1280 in build_wake_gate
+        cannot pass this test."""
+        monkeypatch.setattr(
+            main_module,
+            "get_settings",
+            lambda: _settings(wake_word_enabled=True, wake_word_hop_samples=999),
+        )
+        monkeypatch.setattr(main_module, "WakeWordGate", lambda **kw: "GATE")
+
+        captured = {}
+
+        class FakeDetector:
+            def __init__(self, path, hop_samples=None):
+                captured["path"] = path
+                captured["hop_samples"] = hop_samples
+
+            def load(self):
+                pass
+
+        monkeypatch.setattr(main_module, "LiveKitWakeWordDetector", FakeDetector)
+        main_module.build_wake_gate(llm="LLM")
+
+        assert captured["hop_samples"] == 999
+
     def test_model_is_loaded_at_build_time(self, monkeypatch):
         """A missing model must fail at startup, not on the first frame."""
         monkeypatch.setattr(
@@ -639,7 +666,7 @@ class TestWakeWordWiring:
         loaded = []
 
         class FakeDetector:
-            def __init__(self, path):
+            def __init__(self, path, hop_samples=None):
                 self.path = path
 
             def load(self):
