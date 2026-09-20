@@ -38,11 +38,11 @@ jobs:
       - name: Install dependencies
         run: uv sync --group test
 
-      - name: Check formatting (black)
-        run: uv run --no-sync black --check --diff main.py palm_9000/ tests/
+      - name: Lint (ruff)
+        run: uv run --no-sync ruff check --output-format=github main.py palm_9000/ tests/
 
-      - name: Check import order (isort)
-        run: uv run --no-sync isort --check-only --diff main.py palm_9000/ tests/
+      - name: Check formatting (ruff)
+        run: uv run --no-sync ruff format --check --diff main.py palm_9000/ tests/
 
       # fail_under=100 is configured in pyproject.toml [tool.coverage.report].
       - name: Run tests with coverage

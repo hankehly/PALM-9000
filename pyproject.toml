@@ -24,8 +24,7 @@ test = [
     "pytest-asyncio>=0.24.0",
     "pytest-cov>=6.0.0",
     "scipy>=1.16.0",
-    "black>=25.1.0",
-    "isort>=6.0.1",
+    "ruff>=0.14.0",
 ]
 
 # Dev-only tools and notebook libs (not installed in production when using `--no-dev`).
@@ -65,6 +64,10 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# No [build-system], so the project is not installed into the venv. Without
+# this, `uv run pytest` cannot import palm_9000 or main (only `python -m
+# pytest` works, because that injects CWD into sys.path).
+pythonpath = ["."]
 asyncio_mode = "auto"
 addopts = "-q --strict-markers"
 
@@ -81,8 +84,15 @@ exclude_lines = [
     "if __name__ == .__main__.:",
 ]
 
-[tool.isort]
-profile = "black"
-
-[tool.black]
+[tool.ruff]
 line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+# E/F: pycodestyle + pyflakes, I: import sorting (replaces isort),
+# UP: pyupgrade, B: bugbear.
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests reach into private state deliberately to assert on internals.
+"tests/*" = ["E501"]

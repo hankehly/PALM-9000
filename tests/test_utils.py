@@ -1,5 +1,4 @@
 import struct
-import wave
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -53,7 +52,7 @@ class TestResample:
 class TestPlayAudio:
     @staticmethod
     def _pcm(n=4096, amplitude=1000):
-        return struct.pack("<%dh" % n, *([amplitude] * n))
+        return struct.pack(f"<{n}h", *([amplitude] * n))
 
     def test_writes_every_frame_to_the_stream(self, monkeypatch):
         pa = MagicMock()

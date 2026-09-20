@@ -65,7 +65,7 @@ class ADC0834:
 
         # Read data from MSB to LSB
         val1 = 0
-        for i in range(0, 8):
+        for _ in range(0, 8):
             self._set_clock_high()
             self._set_clock_low()
             val1 = val1 << 1

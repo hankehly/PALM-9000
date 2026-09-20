@@ -1,17 +1,32 @@
-.venv
-*.wav
-.env
-*.ppn
-*.pv
-*.zip
-models/*
-!models/.gitkeep
+# Python
 __pycache__
-*.pcm
-*.onnx
-*.json
-chroma_db
+
+# Virtual environments
+.venv
+
+# Secrets and local configuration
+.env
+
+# Testing and coverage
 .coverage
+.pytest_cache
 coverage.xml
 htmlcov
-.pytest_cache
+
+# Audio artifacts
+*.pcm
+*.wav
+
+# Models and vector stores
+# NOTE: *.json is deliberately broad here; it predates the current layout and
+# will also swallow legitimate config files if any are added.
+*.json
+*.onnx
+*.ppn
+*.pv
+chroma_db
+models/*
+!models/.gitkeep
+
+# Archives
+*.zip

@@ -80,7 +80,7 @@ def heart(fake_hardware):
 
 
 def pcm(samples) -> bytes:
-    return struct.pack("<%dh" % len(samples), *samples)
+    return struct.pack(f"<{len(samples)}h", *samples)
 
 
 class TestConstruction:

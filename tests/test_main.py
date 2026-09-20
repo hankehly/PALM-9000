@@ -11,9 +11,8 @@ These are regression tests for the two failures that took PALM-9000 down:
 Both fail silently at runtime, so they are asserted explicitly here.
 """
 
-import asyncio
 import inspect
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 

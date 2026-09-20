@@ -17,8 +17,8 @@ heartbeat in time with the bot's voice. It speaks Japanese only.
 uv sync --group test                 # install test deps (lean; excludes notebook libs)
 uv run --no-sync pytest              # run the suite (coverage gate: 100%)
 uv run --no-sync pytest --cov --cov-report=term-missing
-uv run --no-sync black main.py palm_9000/ tests/
-uv run --no-sync isort main.py palm_9000/ tests/
+uv run --no-sync ruff check --fix main.py palm_9000/ tests/
+uv run --no-sync ruff format main.py palm_9000/ tests/
 PULSE_LATENCY_MSEC=60 uv run --no-dev main.py   # run for real (on the Pi)
 ```
 
@@ -128,7 +128,8 @@ command's own line and kill your session. Use a bracket pattern
 
 ## Conventions
 
-- Format with black (line length 88) and isort (black profile); CI enforces both.
+- Lint and format with ruff (line length 88, rules E/F/I/UP/B); CI enforces
+  both `ruff check` and `ruff format --check`.
 - `palm_9000/utils.py` imports `pyaudio`/`sounddevice`/`scipy` at module scope.
   Those are not production dependencies, so the module is unimportable under
   `--no-dev`. It exists for the notebooks. The same is true of
