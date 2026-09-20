@@ -62,8 +62,8 @@ class Max7219AmplitudeHeart:
 
     `start()` / `stop()` are available directly when the lifetime does not
     nest that neatly. Brightness is EMA-smoothed and gamma-corrected for
-    perceptual response; see _run() for why a steady level costs no SPI
-    traffic.
+    perceptual response; see _run() for why a steady level avoids per-frame
+    SPI traffic.
     """
 
     def __init__(
