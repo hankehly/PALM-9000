@@ -20,6 +20,7 @@ uv run --no-sync pytest --cov --cov-report=term-missing
 uv run --no-sync ruff check --fix main.py palm_9000/ tests/
 uv run --no-sync ruff format main.py palm_9000/ tests/
 PULSE_LATENCY_MSEC=60 uv run --no-dev main.py   # run for real (on the Pi)
+WAKE_WORD_ENABLED=true PULSE_LATENCY_MSEC=60 uv run --no-dev main.py   # gated
 ```
 
 `uv sync` (no flags) pulls the full `dev` group: torch, whisper, langchain,
@@ -33,10 +34,17 @@ work, and `--no-dev` for running on the Pi.
 ## Pipeline order matters
 
 ```
-transport.input() -> context_aggregator.user() -> llm -> transport.output()
-  -> AudioRecordingControlProcessor -> AudioBufferProcessor
-  -> context_aggregator.assistant()
+transport.input() -> [WakeWordGate] -> context_aggregator.user() -> llm
+  -> transport.output() -> AudioRecordingControlProcessor
+  -> AudioBufferProcessor -> context_aggregator.assistant()
 ```
+
+`WakeWordGate` is present only when wake-word gating is enabled.
+`build_pipeline` takes `wake_gate=None` by default and, when it is
+`None`, leaves the step out entirely rather than inserting a
+pass-through, so the disabled pipeline is the sequence above minus the
+gate, unchanged from before the feature existed. Its position — upstream
+of everything else — is load-bearing; see the gotcha below.
 
 The recording-control and buffer processors sit *after* `transport.output()`
 because they react to bot-speaking frames, which originate downstream. The
@@ -76,6 +84,34 @@ prefix, so pydantic-settings reads it fine. The Pi has its own `.env` that is
 separate from the development machine's — updating one does not update the
 other, and `INPUT_DEVICE` legitimately differs between them, so do not copy
 the file wholesale.
+
+**Wake-word gating is off by default.** With `wake_word_enabled=False`
+the app streams microphone audio to Gemini continuously while running —
+a privacy posture and roughly $0.30/hour. Rates change; check Google's
+current Gemini Live pricing before treating that figure as exact. Set
+`WAKE_WORD_ENABLED=true` before leaving PALM-9000 running unattended.
+
+**The gate fails closed.** A detector error or a missing model keeps the
+microphone shut rather than falling back to ungated streaming.
+`build_wake_gate` loads the model eagerly so a missing file fails at
+startup. Do not add a fallback — it would silently restore continuous
+upload.
+
+**The wake gate's pipeline position is load-bearing.** `WakeWordGate`
+sits between `transport.input()` and `context_aggregator.user()`,
+upstream of every processor that emits the four frames its silence timer
+resets on: `UserStartedSpeakingFrame`, `UserStoppedSpeakingFrame`,
+`BotStartedSpeakingFrame`, `BotStoppedSpeakingFrame`. All four come from
+processors downstream of the gate — the user aggregator and the output
+transport — and both broadcast every frame in *both* directions: the
+aggregator via `FrameProcessor.broadcast_frame`
+(`pipecat/processors/frame_processor.py:1053-1054`), called from
+`llm_response_universal.py:1324,1410`; the output transport the same
+way by hand at `pipecat/transports/base_output.py:716-726,787-798`. The
+gate, upstream of both, only ever sees the upstream copy. Move it
+downstream of the aggregator and it stops seeing all four: the deadline
+never resets, and the plant goes deaf 30 seconds into a conversation,
+with no error.
 
 ## Tests
 

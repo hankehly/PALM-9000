@@ -245,6 +245,20 @@ only on the Pi, so pulling never overwrites it.
 PULSE_LATENCY_MSEC=60 uv run --no-dev main.py
 ```
 
+## Wake word
+
+Wake-word gating is off by default: with it off, the app streams
+microphone audio to Gemini continuously while running. To require a
+wake word first, set `WAKE_WORD_ENABLED=true`:
+
+```sh
+WAKE_WORD_ENABLED=true PULSE_LATENCY_MSEC=60 uv run --no-dev main.py
+```
+
+Say "hey livekit", then speak Japanese. The wake phrase is English
+because the pretrained model is English (`models/wakeword/hey_livekit.onnx`,
+committed to the repo so nothing downloads at runtime).
+
 # Future Work
 
 - [ ] Moisture sensor for health monitoring
@@ -252,3 +266,4 @@ PULSE_LATENCY_MSEC=60 uv run --no-dev main.py
 - [ ] YouTube video
 - [ ] Deploy to the cloud for remote access
 - [ ] Integrate with ChatGPT, add access to metrics via custom API
+- [ ] Custom Japanese wake word (「へい やっし」) to replace "hey livekit"
