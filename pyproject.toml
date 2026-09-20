@@ -1,7 +1,7 @@
 [project]
 name = "palm-9000"
 version = "0.1.0"
-description = "Add your description here"
+description = "A Raspberry Pi and LLM-powered talking palm tree"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -10,7 +10,7 @@ dependencies = [
     "luma-led-matrix>=1.7.1",
     "pydantic>=2.11.7",
     "pydantic-settings>=2.10.1",
-    "pipecat-ai[google,local,silero]>=0.0.84",
+    "pipecat-ai[google,local,silero]>=1.11.0,<2",
     "spidev>=3.7 ; sys_platform == 'linux'",
 ]
 

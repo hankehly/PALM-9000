@@ -3,7 +3,7 @@ import numpy as np
 import pvporcupine
 import sounddevice as sd
 
-from palm_9000.vad import resample
+from palm_9000.utils import resample
 from palm_9000.settings import settings
 
 
