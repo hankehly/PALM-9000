@@ -44,10 +44,14 @@ class ADC0834:
         if mode is None:
             GPIO.setmode(GPIO.BCM)
         elif mode != GPIO.BCM:
+            # Only BCM is supported, so converting the caller's pin numbers
+            # to BOARD would still be rejected here. Offer the one remedy
+            # that actually works.
             raise RuntimeError(
-                "ADC0834 pin numbers are BCM, but GPIO numbering is already "
-                "set to BOARD. Re-run with GPIO.setmode(GPIO.BCM), or convert "
-                "the pin numbers."
+                f"ADC0834 addresses pins by BCM number, but GPIO numbering "
+                f"is already set to {mode}. This class does not support "
+                f"BOARD numbering; call GPIO.setmode(GPIO.BCM) before "
+                f"setup()."
             )
 
         GPIO.setup(self.cs, GPIO.OUT)

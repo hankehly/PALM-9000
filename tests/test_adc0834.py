@@ -1,8 +1,12 @@
 """Tests for the ADC0834 bit-banged SPI-ish protocol.
 
 The chip clocks its 8-bit result out twice: once MSB-first, then LSB-first.
-``read`` compares the two and returns 0 when they disagree, which is the
-device's built-in integrity check.
+``read`` compares the two and raises ``ADC0834ReadError`` when they disagree,
+which is the device's built-in integrity check. It used to return 0 instead,
+making a wiring fault indistinguishable from a genuine zero reading.
+
+Pin numbers are BCM; ``setup()`` selects that mode when none is set and
+refuses to run under BOARD.
 """
 
 import pytest
@@ -184,6 +188,28 @@ class TestPinNumberingMode:
         """BCM pin numbers under BOARD mode would address the wrong pins."""
         fake_gpio.setmode("BOARD")
         with pytest.raises(RuntimeError, match="BCM"):
+            adc.setup()
+
+    def test_the_error_only_offers_a_remedy_that_works(self, adc, fake_gpio):
+        """The message must not suggest converting pins to BOARD numbering.
+
+        Only BCM is supported, so a caller who converted their pin numbers
+        would hit this same rejection. An earlier version of the message
+        offered exactly that dead end.
+        """
+        fake_gpio.setmode("BOARD")
+        with pytest.raises(RuntimeError) as excinfo:
+            adc.setup()
+
+        message = str(excinfo.value)
+        assert "GPIO.setmode(GPIO.BCM)" in message, message
+        assert "convert" not in message.lower(), (
+            f"message offers an impossible remedy: {message}"
+        )
+
+    def test_the_error_names_the_offending_mode(self, adc, fake_gpio):
+        fake_gpio.setmode("BOARD")
+        with pytest.raises(RuntimeError, match="BOARD"):
             adc.setup()
 
     def test_board_mode_failure_happens_before_any_pin_is_touched(self, adc, fake_gpio):
