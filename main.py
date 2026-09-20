@@ -132,7 +132,7 @@ async def main():
 
     try:
         runner = WorkerRunner()
-        runner.add_workers(task)
+        await runner.add_workers(task)
         await runner.run()
     except Exception as e:
         logger.error(f"Pipeline error: {e}")
