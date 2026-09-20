@@ -134,8 +134,12 @@ command's own line and kill your session. Use a bracket pattern
 
 - Lint and format with ruff (line length 88, rules E/F/I/UP/B); CI enforces
   both `ruff check` and `ruff format --check`.
-- `palm_9000/utils.py` imports `pyaudio`/`sounddevice`/`scipy` at module scope.
-  Those are not production dependencies, so the module is unimportable under
-  `--no-dev`. It exists for the notebooks. The same is true of
-  `adc0834.py`, which needs `RPi.GPIO` — this blocks the moisture-sensor
-  roadmap item until the dependency groups are reorganized.
+- `palm_9000/utils.py` is notebook tooling; nothing in the runtime pipeline
+  imports it. Its `scipy`/`sounddevice`/`pyaudio` imports are deferred into
+  the functions that use them, so the module itself loads under `--no-dev`
+  and only a call that needs a missing package raises. Keep them deferred —
+  `tests/test_packaging.py` asserts it via the AST.
+- Linux-only hardware wheels (`spidev` for the MAX7219, `rpi-gpio` for the
+  ADC0834) are **main** dependencies carrying a `sys_platform == 'linux'`
+  marker, so they install on the Pi and are simply absent on a development
+  Mac. Tests fake them; see `tests/conftest.py`.
