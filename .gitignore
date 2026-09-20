@@ -28,6 +28,8 @@ htmlcov
 chroma_db
 models/*
 !models/.gitkeep
+!models/wakeword/
+!models/wakeword/**
 
 # Archives
 *.zip
