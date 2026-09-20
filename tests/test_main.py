@@ -72,6 +72,13 @@ class FakeHeart:
     async def stop(self):
         self.stopped += 1
 
+    async def __aenter__(self):
+        await self.start()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        await self.stop()
+
     def process_audio(self, audio):
         self.audio_chunks.append(audio)
 
@@ -196,7 +203,7 @@ class TestWorkerRegistrationRegression:
 
     async def test_source_awaits_add_workers(self):
         """A non-awaited call would leave a dangling coroutine and connect to nothing."""
-        source = inspect.getsource(main_module.main)
+        source = inspect.getsource(main_module.run_pipeline)
         assert "await runner.add_workers(" in source
 
 
@@ -240,9 +247,9 @@ class TestLLMConfiguration:
         await main_module.main()
 
         settings = wired["llm_kwargs"]["settings"]
-        assert settings.model == main_module.app_settings.gemini_live_model
+        assert settings.model == main_module.get_settings().gemini_live_model
         assert (
-            settings.voice == main_module.app_settings.google_multimodal_live_voice_id
+            settings.voice == main_module.get_settings().google_multimodal_live_voice_id
         )
 
     async def test_language_is_japanese(self, wired):
@@ -265,7 +272,7 @@ class TestLLMConfiguration:
 
     async def test_api_key_comes_from_settings(self, wired):
         await main_module.main()
-        expected = main_module.app_settings.google_api_key.get_secret_value()
+        expected = main_module.get_settings().google_api_key.get_secret_value()
         assert wired["llm_kwargs"]["api_key"] == expected
 
 
@@ -341,3 +348,204 @@ def _audio_buffer() -> FakeAudioBuffer:
 
 def _worker() -> FakeWorker:
     return FakeWorker.instances[0]
+
+
+class TestHeartIsNeverLeftOn:
+    """Regression: a failure during startup used to leave the matrix lit.
+
+    heart.start() ran before the try/finally that stopped it, so anything
+    raising in between -- a bad API key, a retired model id, no network --
+    orphaned the render task with the display still on.
+    """
+
+    async def test_startup_failure_still_stops_the_heart(self, wired, monkeypatch):
+        def exploding_service(**kwargs):
+            raise RuntimeError("invalid api key")
+
+        monkeypatch.setattr(main_module, "GeminiLiveLLMService", exploding_service)
+
+        with pytest.raises(RuntimeError, match="invalid api key"):
+            await main_module.main()
+
+        heart = FakeHeart.instances[0]
+        assert heart.started == 1
+        assert heart.stopped == 1, "the display was left running after a failure"
+
+    async def test_transport_failure_still_stops_the_heart(self, wired, monkeypatch):
+        def exploding_transport(params):
+            raise OSError("no audio device")
+
+        monkeypatch.setattr(main_module, "LocalAudioTransport", exploding_transport)
+
+        with pytest.raises(OSError):
+            await main_module.main()
+
+        assert FakeHeart.instances[0].stopped == 1
+
+    async def test_heart_is_used_as_a_context_manager(self):
+        """The guarantee is structural, not a try/finally someone can move."""
+        source = inspect.getsource(main_module.main)
+        assert "async with" in source
+        assert "Max7219AmplitudeHeart" in source
+
+    async def test_normal_run_still_stops_the_heart(self, wired):
+        await main_module.main()
+        heart = FakeHeart.instances[0]
+        assert (heart.started, heart.stopped) == (1, 1)
+
+
+class TestBuildersInIsolation:
+    """The builders are testable without faking the whole module.
+
+    Before the extraction, asserting anything about the pipeline meant
+    monkeypatching eight module attributes and calling main().
+    """
+
+    def test_build_transport_audio_params(self, monkeypatch):
+        captured = {}
+
+        def fake_transport(params):
+            captured["params"] = params
+            return "TRANSPORT"
+
+        monkeypatch.setattr(main_module, "LocalAudioTransport", fake_transport)
+
+        assert main_module.build_transport() == "TRANSPORT"
+        params = captured["params"]
+        assert params.audio_in_sample_rate == main_module.AUDIO_IN_SAMPLE_RATE
+        assert params.audio_out_sample_rate == main_module.AUDIO_OUT_SAMPLE_RATE
+        assert params.audio_out_10ms_chunks == main_module.AUDIO_OUT_10MS_CHUNKS
+        assert params.audio_in_enabled is True
+        assert params.audio_out_enabled is True
+
+    def test_build_llm_uses_settings_and_the_modern_kwargs(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(
+            main_module,
+            "GeminiLiveLLMService",
+            lambda **kw: captured.update(kw) or "LLM",
+        )
+
+        assert main_module.build_llm() == "LLM"
+        assert "model" not in captured  # deprecated, removed in pipecat 2.0
+        assert "voice_id" not in captured
+        assert "params" not in captured
+        assert (
+            captured["settings"].model == main_module.get_settings().gemini_live_model
+        )
+        assert captured["settings"].language is main_module.Language.JA
+
+    def test_build_pipeline_order(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(
+            main_module,
+            "Pipeline",
+            lambda processors: captured.setdefault("p", processors),
+        )
+
+        transport = MagicMock()
+        transport.input.return_value = "IN"
+        transport.output.return_value = "OUT"
+        aggregators = MagicMock()
+        aggregators.user.return_value = "AGG_USER"
+        aggregators.assistant.return_value = "AGG_ASSISTANT"
+
+        main_module.build_pipeline(
+            transport=transport,
+            llm="LLM",
+            context_aggregator=aggregators,
+            recording_control="CTL",
+            audio_buffer="BUF",
+        )
+
+        assert captured["p"] == [
+            "IN",
+            "AGG_USER",
+            "LLM",
+            "OUT",
+            "CTL",
+            "BUF",
+            "AGG_ASSISTANT",
+        ]
+
+    def test_build_pipeline_keeps_the_user_aggregator_upstream_of_the_llm(
+        self, monkeypatch
+    ):
+        """Regression guard: the realtime gate depends on this ordering."""
+        captured = {}
+        monkeypatch.setattr(
+            main_module,
+            "Pipeline",
+            lambda processors: captured.setdefault("p", processors),
+        )
+        transport = MagicMock()
+        transport.input.return_value = "IN"
+        transport.output.return_value = "OUT"
+        aggregators = MagicMock()
+        aggregators.user.return_value = "AGG_USER"
+        aggregators.assistant.return_value = "AGG_ASSISTANT"
+
+        main_module.build_pipeline(
+            transport=transport,
+            llm="LLM",
+            context_aggregator=aggregators,
+            recording_control="CTL",
+            audio_buffer="BUF",
+        )
+
+        order = captured["p"]
+        assert order.index("AGG_USER") < order.index("LLM")
+        assert order.index("OUT") < order.index("CTL")
+
+
+class TestNamedConstants:
+    def test_audio_buffer_size_matches_the_documented_rate(self):
+        """512 bytes at 24kHz mono int16 is ~10.7ms, so ~94 callbacks/sec."""
+        ms = (
+            main_module.AUDIO_BUFFER_SIZE / 2 / main_module.AUDIO_OUT_SAMPLE_RATE * 1000
+        )
+        assert 10 < ms < 11
+
+    def test_idle_timeout_is_ten_minutes(self):
+        assert main_module.IDLE_TIMEOUT_SECS == 600
+
+
+class TestRunnerFailureKeepsTheTraceback:
+    """logger.exception, not logger.error.
+
+    Preserving the traceback is one of this PR's stated fixes, but the
+    existing runner-failure test only checks that the heart stops -- swapping
+    logger.exception back to logger.error leaves it green, so the fix could
+    silently regress.
+    """
+
+    async def test_runner_failure_is_logged_with_its_traceback(
+        self, wired, monkeypatch
+    ):
+        calls = {"exception": [], "error": []}
+        monkeypatch.setattr(
+            main_module.logger,
+            "exception",
+            lambda msg, *a, **kw: calls["exception"].append(msg),
+        )
+        monkeypatch.setattr(
+            main_module.logger,
+            "error",
+            lambda msg, *a, **kw: calls["error"].append(msg),
+        )
+
+        async def failing_run(self):
+            self.ran += 1
+            raise RuntimeError("pipeline exploded")
+
+        monkeypatch.setattr(FakeRunner, "run", failing_run)
+        await main_module.main()
+
+        assert calls["exception"], (
+            "runner failure must be logged with logger.exception so the "
+            "traceback survives"
+        )
+        assert "Pipeline error" in calls["exception"][0]
+        assert not calls["error"], (
+            "logger.error drops the traceback; use logger.exception"
+        )
