@@ -102,15 +102,21 @@ sits between `transport.input()` and `context_aggregator.user()`,
 upstream of every processor that emits the six frames its silence timer
 resets on: `UserStartedSpeakingFrame`, `UserStoppedSpeakingFrame`,
 `UserSpeakingFrame`, `BotStartedSpeakingFrame`, `BotStoppedSpeakingFrame`,
-`BotSpeakingFrame`. All six come from
-processors downstream of the gate — the user aggregator and the output
-transport — and both broadcast every frame in *both* directions: the
-aggregator via `FrameProcessor.broadcast_frame`
-(`pipecat/processors/frame_processor.py:1053-1054`), called from
-`llm_response_universal.py:1324,1410`; the output transport the same
-way by hand at `pipecat/transports/base_output.py:716-726,787-798`. The
-gate, upstream of both, only ever sees the upstream copy. Move it
-downstream of the aggregator and it stops seeing all six: the deadline
+`BotSpeakingFrame`. All six come from processors downstream of the gate —
+the user aggregator and the output transport — and each is emitted in
+*both* directions, by three different routes:
+
+- the user start/stop frames via `FrameProcessor.broadcast_frame`
+  (`frame_processor.py:1053-1054`) from
+  `llm_response_universal.py:1324,1410`;
+- `UserSpeakingFrame` via `_queued_broadcast_frame`
+  (`llm_response_universal.py:1268-1281`) from `_on_vad_speech_activity`
+  at `:1310` — a different method, which also pushes UPSTREAM;
+- the three bot frames by hand in the output transport
+  (`base_output.py:716-726,787-798`, and `:805` for `BotSpeakingFrame`).
+
+The gate, upstream of all of them, only ever sees the upstream copy. Move
+it downstream of the aggregator and it stops seeing all six: the deadline
 never resets, and the plant goes deaf 30 seconds into a conversation,
 with no error.
 
@@ -143,6 +149,12 @@ clears that buffer and keeps the model; dropping the model forces a
 full ONNX session rebuild on the next frame, which on a Pi is seconds
 of stall after every wake.
 
+Because `reset()` empties the buffer, there is a ~2 s window after the
+gate re-arms during which no score is possible. That is a *delay*, not a
+miss: a wake word spoken in that window is still in the buffer when it
+first fills, so it scores up to ~2 s late rather than being lost. Only an
+utterance straddling the re-arm instant loses its beginning.
+
 **With gating on, local VAD can interrupt the bot.** The turn-start
 strategy defaults to `enable_interruptions=True`
 (`base_user_turn_start_strategy.py:56`), so echo leakage or a second
@@ -150,9 +162,9 @@ person talking will cut a reply off mid-sentence without any wake word.
 This is accepted rather than fixed: there is no knob for it on
 `LLMUserAggregatorParams`, and suppressing it means pinning pipecat's
 whole default strategy list — the kind of coupling to internals that
-caused the silent-audio bug above. Barge-in is also often wanted. Watch
-for it when testing on device, at higher speaker volume and on longer
-replies.
+caused the silent-audio bug above. Barge-in is also often wanted. It is
+step 6 of `docs/wake-word-on-device-checklist.md`, which is where the
+rest of the unverified hardware behaviour is tracked too.
 
 **With gating on, the 10-minute idle timeout effectively stops firing.**
 Local VAD emits `UserStartedSpeakingFrame` and `UserSpeakingFrame`,
