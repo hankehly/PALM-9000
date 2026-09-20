@@ -95,9 +95,9 @@ class WakeWordGate(FrameProcessor):
         if score > self._threshold:
             logger.info(f"Wake word detected (score {score:.2f})")
             self._detector.reset()
+            self._llm.set_audio_input_paused(False)
             self._awake = True
             self._deadline = self._now() + self._silence_timeout_secs
-            self._llm.set_audio_input_paused(False)
 
     def _sleep(self) -> None:
         logger.info(

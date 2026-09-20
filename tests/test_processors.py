@@ -192,6 +192,34 @@ class TestWakeWordGate:
 
         assert llm.paused_calls == [False, True]
 
+    async def test_re_arms_exactly_on_the_deadline(self, clock):
+        """The deadline is inclusive: at exactly T+timeout the gate sleeps."""
+        detector, llm = FakeDetector([0.9]), FakeLLM()
+        gate = make_gate(detector, llm, clock)
+        await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+
+        clock.advance(30.0)
+        await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+
+        assert llm.paused_calls == [False, True]
+
+    async def test_a_failing_unpause_leaves_the_gate_asleep(self, clock):
+        """_awake must never be True while the service is still paused."""
+
+        class ExplodingLLM(FakeLLM):
+            def set_audio_input_paused(self, paused):
+                super().set_audio_input_paused(paused)
+                raise RuntimeError("websocket is gone")
+
+        detector = FakeDetector([0.9])
+        gate = make_gate(detector, ExplodingLLM(), clock)
+
+        with pytest.raises(RuntimeError):
+            await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+
+        assert gate._awake is False
+        assert gate._deadline == 0.0
+
     @pytest.mark.parametrize(
         "frame",
         [
@@ -203,12 +231,18 @@ class TestWakeWordGate:
         ids=["user_start", "user_stop", "bot_start", "bot_stop"],
     )
     async def test_activity_frames_reset_the_deadline(self, clock, frame):
+        """Activity frames reset the silence deadline.
+
+        These frames are emitted downstream of the gate and reach it only as
+        the upstream copy of a broadcast. The gate must track them to extend
+        the silence timeout when the user/bot is actively speaking.
+        """
         detector, llm = FakeDetector([0.9]), FakeLLM()
         gate = make_gate(detector, llm, clock)
         await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
 
         clock.advance(20.0)
-        await gate.process_frame(frame, FrameDirection.DOWNSTREAM)
+        await gate.process_frame(frame, FrameDirection.UPSTREAM)
         clock.advance(20.0)
         await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
 
@@ -217,12 +251,18 @@ class TestWakeWordGate:
     async def test_every_frame_is_forwarded(self, clock):
         detector, llm = FakeDetector([0.9]), FakeLLM()
         gate = make_gate(detector, llm, clock)
-        frames = [audio_frame(), TextFrame(text="hi"), BotStoppedSpeakingFrame()]
+        sent = [
+            (audio_frame(), FrameDirection.DOWNSTREAM),
+            (TextFrame(text="hi"), FrameDirection.DOWNSTREAM),
+            (BotStoppedSpeakingFrame(), FrameDirection.UPSTREAM),
+        ]
 
-        for f in frames:
-            await gate.process_frame(f, FrameDirection.DOWNSTREAM)
+        for frame, direction in sent:
+            await gate.process_frame(frame, direction)
 
-        assert [f for f, _ in gate.pushed] == frames
+        assert gate.pushed == sent, (
+            "frames must be forwarded in the direction they arrived"
+        )
 
     async def test_detector_failure_keeps_it_asleep(self, clock):
         class Exploding(FakeDetector):
@@ -238,11 +278,17 @@ class TestWakeWordGate:
         assert len(gate.pushed) == 1, "frame must still be forwarded"
 
     async def test_activity_frames_are_ignored_while_asleep(self, clock):
-        """A bot frame must not extend a deadline that is not running."""
+        """A bot frame must not extend a deadline that is not running.
+
+        Activity frames arrive as upstream broadcasts, even though they may be
+        emitted downstream. The gate must not extend a deadline that does not
+        exist (i.e., when not yet awake).
+        """
         detector, llm = FakeDetector([0.0]), FakeLLM()
         gate = make_gate(detector, llm, clock)
 
-        await gate.process_frame(BotStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+        await gate.process_frame(BotStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
 
         assert llm.paused_calls == []
         assert len(gate.pushed) == 1
+        assert gate._deadline == 0.0
