@@ -108,12 +108,22 @@ def build_wake_gate(llm: GeminiLiveLLMService) -> WakeWordGate | None:
 
 
 def build_context_aggregator() -> LLMContextAggregatorPair:
-    """Aggregators with local VAD.
+    """Aggregators, with local VAD only when the gate needs it.
 
-    GeminiLiveLLMService does not emit user turn frames, so the gate's silence
-    timer needs a local source. vad_analyzer lives on LLMUserAggregatorParams
-    in pipecat 1.x, not on TransportParams.
+    GeminiLiveLLMService does not emit user turn frames, so the gate's
+    silence timer needs a local source. vad_analyzer lives on
+    LLMUserAggregatorParams in pipecat 1.x, not on TransportParams.
+
+    It is attached ONLY when gating is on. A vad_analyzer is what
+    constructs pipecat's VADController and makes the default
+    VADUserTurnStartStrategy live, and that strategy broadcasts an
+    interruption on every detected turn start, which
+    GeminiLiveLLMService turns into a TTSStoppedFrame. Attaching it
+    unconditionally would let imperfect echo cancellation make the bot
+    interrupt itself -- a failure that does not exist with gating off.
     """
+    if not get_settings().wake_word_enabled:
+        return LLMContextAggregatorPair(LLMContext())
     return LLMContextAggregatorPair(
         LLMContext(),
         user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
@@ -141,6 +151,13 @@ def build_pipeline(
     recording_control and audio_buffer sit after transport.output() because
     they react to bot-speaking frames, which originate downstream. That is
     also why the buffer only ever sees bot audio, never the user's.
+
+    The wake gate, when present, sits first -- upstream of every processor
+    that emits the four frames its silence timer resets on. Those frames
+    all originate downstream of it and reach it only as the upstream copy
+    of a broadcast, so moving the gate below context_aggregator.user()
+    means it stops seeing them: the deadline never resets and the plant
+    goes deaf 30 seconds into a conversation, with no error.
     """
     processors = [transport.input()]
     if wake_gate is not None:

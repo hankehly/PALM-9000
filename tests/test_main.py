@@ -735,6 +735,9 @@ class TestWakeWordWiring:
 
     def test_aggregator_gets_a_vad_analyzer(self, monkeypatch):
         """Without it the silence timer has no activity signal."""
+        monkeypatch.setattr(
+            main_module, "get_settings", lambda: _settings(wake_word_enabled=True)
+        )
         captured = {}
         monkeypatch.setattr(
             main_module,
@@ -743,3 +746,23 @@ class TestWakeWordWiring:
         )
         main_module.build_context_aggregator()
         assert captured["user_params"].vad_analyzer is not None
+
+    def test_aggregator_has_no_vad_analyzer_when_gating_is_off(self, monkeypatch):
+        """The disabled path must stay identical to the pre-feature app.
+
+        A vad_analyzer builds pipecat's VADController, which makes the
+        default turn-start strategy broadcast interruptions. With no gate
+        there is nothing that needs the signal, and the interruptions would
+        let poor echo cancellation make the bot cut itself off.
+        """
+        monkeypatch.setattr(
+            main_module, "get_settings", lambda: _settings(wake_word_enabled=False)
+        )
+        captured = {}
+        monkeypatch.setattr(
+            main_module,
+            "LLMContextAggregatorPair",
+            lambda context, **kw: captured.update(kw) or MagicMock(),
+        )
+        main_module.build_context_aggregator()
+        assert captured == {}, "the disabled path must pass no user_params at all"
