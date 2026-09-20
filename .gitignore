@@ -6,16 +6,10 @@ __pycache__
 
 # Secrets and local configuration
 .env
-# Credential files. This replaces a previous blanket `*.json`, which also hid
-# legitimate config (editor settings, tool configs). No .json file has ever
-# been committed to this repo, so nothing was relying on the broad form.
-*-credentials.json
-*.credentials.json
-credentials.json
-service-account*.json
 
 # Editor and OS cruft
 .DS_Store
+.vscode/
 
 # Testing and coverage
 .coverage
