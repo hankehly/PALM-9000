@@ -107,17 +107,33 @@ class Max7219AmplitudeHeart:
         self._task = asyncio.create_task(self._run())
 
     async def stop(self) -> None:
+        """Stop the render loop and blank the display.
+
+        Never raises on account of the render task. Awaiting a task that
+        already failed -- an unplugged SPI bus, say -- would re-raise its
+        exception here, and since stop() runs from __aexit__ that would
+        replace whatever error the caller was already unwinding. The render
+        failure is logged with its traceback instead.
+        """
         if not self._task:
             return
         self._stop_evt.set()
         try:
             await asyncio.wait_for(self._task, timeout=0.5)
         except TimeoutError:
+            # wait_for has already cancelled the task; this just drains it.
+            # A task that fails *during* cancellation surfaces from wait_for
+            # as that exception rather than TimeoutError, so it lands in the
+            # handler below, not here.
             self._task.cancel()
             try:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        # CancelledError derives from BaseException, not Exception, so a
+        # cancellation of stop() itself still propagates past this handler.
+        except Exception:
+            logger.exception("Render task failed")
         finally:
             self._task = None
             self._blank()

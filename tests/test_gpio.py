@@ -551,3 +551,111 @@ class TestBlank:
         heart._blank()
         assert heart.device.contrasts[-1] == 0
         assert heart.device.cleared >= 1
+
+
+class TestStopDoesNotMaskTheRealError:
+    """A failed render task must not replace the error being unwound.
+
+    stop() awaits the render task. If that task already raised -- say the SPI
+    bus disconnected and _draw_heart() failed -- re-awaiting it re-raises
+    inside __aexit__, which would discard whatever the body was failing with.
+    """
+
+    async def test_render_failure_does_not_replace_the_body_error(
+        self, fake_hardware, monkeypatch
+    ):
+        heart = Max7219AmplitudeHeart(fps=1000)
+
+        def explode():
+            raise OSError("SPI bus disconnected")
+
+        with pytest.raises(RuntimeError, match="the real problem"):
+            async with heart:
+                # Make the render loop die the way a yanked cable would.
+                monkeypatch.setattr(heart, "_draw_heart", explode)
+                heart._stop_evt.clear()
+                await asyncio.sleep(0.02)
+                raise RuntimeError("the real problem")
+
+    async def test_render_failure_alone_does_not_escape_stop(
+        self, fake_hardware, monkeypatch
+    ):
+        """Even with no body error, shutdown should not raise."""
+        heart = Max7219AmplitudeHeart(fps=1000)
+        await heart.start()
+
+        async def failing_run():
+            raise OSError("SPI bus disconnected")
+
+        heart._task = asyncio.create_task(failing_run())
+        await asyncio.sleep(0.01)
+
+        await heart.stop()  # must not raise
+        assert heart._task is None
+
+    async def test_the_render_failure_is_still_logged(self, fake_hardware, monkeypatch):
+        """Swallowed is not the same as hidden."""
+        records = []
+        monkeypatch.setattr(
+            gpio_module.logger, "exception", lambda msg, *a, **kw: records.append(msg)
+        )
+
+        heart = Max7219AmplitudeHeart(fps=1000)
+        await heart.start()
+
+        async def failing_run():
+            raise OSError("SPI bus disconnected")
+
+        heart._task = asyncio.create_task(failing_run())
+        await asyncio.sleep(0.01)
+        await heart.stop()
+
+        assert records, "the render task failure vanished without a trace"
+
+    async def test_failure_during_cancellation_is_also_contained(
+        self, fake_hardware, monkeypatch
+    ):
+        """A task that refuses to stop, then fails while being cancelled.
+
+        asyncio.wait_for cancels the task itself on timeout and re-raises
+        whatever the task ended with, so this arrives as an OSError rather
+        than a TimeoutError.
+        """
+        records = []
+        monkeypatch.setattr(
+            gpio_module.logger, "exception", lambda msg, *a, **kw: records.append(msg)
+        )
+
+        heart = Max7219AmplitudeHeart(fps=1000)
+        await heart.start()
+
+        async def stubborn():
+            try:
+                await asyncio.sleep(30)  # ignores _stop_evt, so stop() times out
+            except asyncio.CancelledError:
+                raise OSError("bus died while shutting down") from None
+
+        heart._task = asyncio.create_task(stubborn())
+        await asyncio.sleep(0.01)
+
+        await heart.stop()  # must not raise
+
+        assert heart._task is None
+        # wait_for re-raises the task's own error instead of TimeoutError,
+        # so this lands in stop()'s general handler.
+        assert any("render task failed" in m.lower() for m in records), records
+
+    async def test_cancelling_stop_itself_still_propagates(self, fake_hardware):
+        """CancelledError is a BaseException, so it must pass through."""
+        heart = Max7219AmplitudeHeart(fps=1000)
+        await heart.start()
+
+        async def never():
+            await asyncio.sleep(30)
+
+        heart._task = asyncio.create_task(never())
+        heart._task.cancel()
+        await asyncio.sleep(0)
+
+        with pytest.raises(asyncio.CancelledError):
+            await heart.stop()
