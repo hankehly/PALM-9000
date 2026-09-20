@@ -22,7 +22,7 @@ from pipecat.workers.runner import WorkerRunner
 
 from palm_9000.gpio import Max7219AmplitudeHeart
 from palm_9000.processors import AudioRecordingControlProcessor
-from palm_9000.settings import settings as app_settings
+from palm_9000.settings import get_settings
 
 IDLE_TIMEOUT_SECS = 10 * 60
 
@@ -67,12 +67,13 @@ def build_llm() -> GeminiLiveLLMService:
     Note the `settings=` object: the older `model=` / `voice_id=` / `params=`
     keyword arguments are deprecated and disappear in pipecat 2.0.
     """
+    settings = get_settings()
     return GeminiLiveLLMService(
-        api_key=app_settings.google_api_key.get_secret_value(),
+        api_key=settings.google_api_key.get_secret_value(),
         system_instruction=SYSTEM_INSTRUCTION,
         settings=GeminiLiveLLMSettings(
-            model=app_settings.gemini_live_model,
-            voice=app_settings.google_multimodal_live_voice_id,
+            model=settings.gemini_live_model,
+            voice=settings.google_multimodal_live_voice_id,
             language=Language.JA,
         ),
     )

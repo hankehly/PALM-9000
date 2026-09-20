@@ -247,9 +247,9 @@ class TestLLMConfiguration:
         await main_module.main()
 
         settings = wired["llm_kwargs"]["settings"]
-        assert settings.model == main_module.app_settings.gemini_live_model
+        assert settings.model == main_module.get_settings().gemini_live_model
         assert (
-            settings.voice == main_module.app_settings.google_multimodal_live_voice_id
+            settings.voice == main_module.get_settings().google_multimodal_live_voice_id
         )
 
     async def test_language_is_japanese(self, wired):
@@ -272,7 +272,7 @@ class TestLLMConfiguration:
 
     async def test_api_key_comes_from_settings(self, wired):
         await main_module.main()
-        expected = main_module.app_settings.google_api_key.get_secret_value()
+        expected = main_module.get_settings().google_api_key.get_secret_value()
         assert wired["llm_kwargs"]["api_key"] == expected
 
 
@@ -430,7 +430,9 @@ class TestBuildersInIsolation:
         assert "model" not in captured  # deprecated, removed in pipecat 2.0
         assert "voice_id" not in captured
         assert "params" not in captured
-        assert captured["settings"].model == main_module.app_settings.gemini_live_model
+        assert (
+            captured["settings"].model == main_module.get_settings().gemini_live_model
+        )
         assert captured["settings"].language is main_module.Language.JA
 
     def test_build_pipeline_order(self, monkeypatch):

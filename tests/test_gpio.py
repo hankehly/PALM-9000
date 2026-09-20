@@ -234,32 +234,32 @@ class TestLevelClamping:
 class TestBrightness:
     def test_silence_maps_to_min_brightness(self, fake_hardware):
         h = Max7219AmplitudeHeart(min_brightness=7, ema=1.0)
-        assert h._brightness_from_level(0.0) == 7
+        assert h._advance_envelope(0.0) == 7
 
     def test_full_level_maps_to_max_brightness(self, fake_hardware):
         h = Max7219AmplitudeHeart(min_brightness=0, max_brightness=255, ema=1.0)
-        assert h._brightness_from_level(1.0) == 255
+        assert h._advance_envelope(1.0) == 255
 
     def test_applies_gamma_correction(self, fake_hardware):
         h = Max7219AmplitudeHeart(
             min_brightness=0, max_brightness=255, ema=1.0, gamma=2.0
         )
         # perceptual = level ** (1/gamma)
-        assert h._brightness_from_level(0.25) == int(math.sqrt(0.25) * 255)
+        assert h._advance_envelope(0.25) == int(math.sqrt(0.25) * 255)
 
     def test_ema_smooths_toward_the_target(self, fake_hardware):
         h = Max7219AmplitudeHeart(
             min_brightness=0, max_brightness=255, ema=0.5, gamma=1.0
         )
-        first = h._brightness_from_level(1.0)
-        second = h._brightness_from_level(1.0)
+        first = h._advance_envelope(1.0)
+        second = h._advance_envelope(1.0)
         assert first == int(0.5 * 255)
         assert second > first  # converging upward
 
     def test_result_stays_within_bounds(self, fake_hardware):
         h = Max7219AmplitudeHeart(min_brightness=10, max_brightness=200)
         for level in (0.0, 0.1, 0.5, 0.9, 1.0):
-            assert 10 <= h._brightness_from_level(level) <= 200
+            assert 10 <= h._advance_envelope(level) <= 200
 
 
 class TestDrawHeart:

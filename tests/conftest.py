@@ -16,9 +16,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-# palm_9000.settings instantiates Settings() at import time, and google_api_key
-# is required. Without this, importing the package would depend on a developer's
-# local .env and would fail outright in CI.
+# Settings are loaded lazily now, so importing the package no longer needs a
+# key -- tests/test_packaging.py asserts that. This placeholder is still
+# required because tests that exercise main() reach get_settings() at call
+# time, and google_api_key has no default.
 os.environ.setdefault("GOOGLE_API_KEY", "test-key-not-real")
 
 # --------------------------------------------------------------------------

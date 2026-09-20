@@ -10,54 +10,60 @@ from luma.led_matrix.device import max7219
 
 _INT16_MAX = 32768.0
 
+# The heart, as (x, y) points on the 8x8 grid. Static: only its brightness
+# changes at runtime, which is why _run() pushes the framebuffer once.
+_HEART_PIXELS = (
+    # fmt: off
+    (1, 1),
+    (6, 1),
+    (0, 2),
+    (1, 2),
+    (2, 2),
+    (5, 2),
+    (6, 2),
+    (7, 2),
+    (0, 3),
+    (1, 3),
+    (2, 3),
+    (3, 3),
+    (4, 3),
+    (5, 3),
+    (6, 3),
+    (7, 3),
+    (1, 4),
+    (2, 4),
+    (3, 4),
+    (4, 4),
+    (5, 4),
+    (6, 4),
+    (2, 5),
+    (3, 5),
+    (4, 5),
+    (5, 5),
+    (3, 6),
+    (4, 6),
+    # fmt: on
+)
+
 
 class Max7219AmplitudeHeart:
-    """
-    Drive a heart icon on an 8x8 MAX7219, brightness = audio amplitude.
-    Call `start()` once. Feed audio via `heart.process_audio(audio_bytes)`.
+    """Drive a heart icon on an 8x8 MAX7219, brightness tracking audio level.
 
-    Sample Usage:
+    Feed it 16-bit little-endian PCM and it renders the envelope as display
+    brightness. `process_audio` is thread-safe, so it can be called straight
+    from an audio callback thread; set `channels` for interleaved input.
 
-        import asyncio
-        from palm_9000.gpio import Max7219AmplitudeHeart
+    Use it as an async context manager so the display cannot be left lit if
+    something later in startup fails:
 
-        async def main():
-            heart = Max7219AmplitudeHeart(fps=60, ema=0.4, gamma=2.0, channels=1)
-            await heart.start()
+        async with Max7219AmplitudeHeart(min_brightness=0) as heart:
+            heart.process_audio(pcm_bytes)   # from your audio callback
+            ...
 
-            # In a real app you'll be pulling 16‑bit mono (or interleaved) PCM
-            # audio frames from a microphone / audio callback. Below we just
-            # simulate a few seconds of varying amplitude.
-            import math, struct, time
-            sample_rate = 16000
-            frame_ms = 40  # 40 ms frames
-            frame_samples = int(sample_rate * frame_ms / 1000)
-            t = 0.0
-            dt = frame_samples / sample_rate
-            try:
-                for _ in range(int(5 * 1000 / frame_ms)):  # ~5 seconds
-                    # Create a synthetic sine wave whose amplitude slowly pulses
-                    amp = 0.2 + 0.75 * (0.5 * (1 + math.sin(2 * math.pi * 0.6 * t)))
-                    freq = 440
-                    frame = [
-                        int(amp * 0.8 * 32767
-                            * math.sin(2 * math.pi * freq * (t + i / sample_rate)))
-                        for i in range(frame_samples)
-                    ]
-                    audio_bytes = struct.pack('<' + 'h'*len(frame), *frame)
-                    heart.process_audio(audio_bytes)
-                    await asyncio.sleep(frame_ms / 1000.0)
-                    t += dt
-            finally:
-                await heart.stop()
-
-        if __name__ == "__main__":
-            asyncio.run(main())
-
-    Notes:
-    - `process_audio` is thread-safe; you can call it from an audio callback thread.
-    - Audio must be 16-bit little-endian PCM. For multi-channel audio set `channels`.
-    - Brightness curve is smoothed (EMA) and gamma-corrected for perceptual response.
+    `start()` / `stop()` are available directly when the lifetime does not
+    nest that neatly. Brightness is EMA-smoothed and gamma-corrected for
+    perceptual response; see _run() for why a steady level costs no SPI
+    traffic.
     """
 
     def __init__(
@@ -177,7 +183,13 @@ class Max7219AmplitudeHeart:
         with self._lock:
             return self._level
 
-    def _brightness_from_level(self, level01: float) -> int:
+    def _advance_envelope(self, level01: float) -> int:
+        """Advance the smoothed envelope by one tick and return brightness.
+
+        This mutates self._env: the EMA is a filter over time, so it must be
+        stepped on every frame even when the resulting brightness is
+        unchanged and no SPI write follows.
+        """
         # EMA smoothing
         self._env = (1 - self.ema) * self._env + self.ema * level01
         # Perceptual gamma
@@ -187,40 +199,8 @@ class Max7219AmplitudeHeart:
         )
 
     def _draw_heart(self) -> None:
-        pixels = [
-            # fmt: off
-            (1, 1),
-            (6, 1),
-            (0, 2),
-            (1, 2),
-            (2, 2),
-            (5, 2),
-            (6, 2),
-            (7, 2),
-            (0, 3),
-            (1, 3),
-            (2, 3),
-            (3, 3),
-            (4, 3),
-            (5, 3),
-            (6, 3),
-            (7, 3),
-            (1, 4),
-            (2, 4),
-            (3, 4),
-            (4, 4),
-            (5, 4),
-            (6, 4),
-            (2, 5),
-            (3, 5),
-            (4, 5),
-            (5, 5),
-            (3, 6),
-            (4, 6),
-            # fmt: on
-        ]
         with canvas(self.device) as draw:
-            for x, y in pixels:
+            for x, y in _HEART_PIXELS:
                 draw.point((x, y), fill="white")
 
     async def _run(self) -> None:
@@ -243,7 +223,7 @@ class Max7219AmplitudeHeart:
             last_redraw = time.monotonic()
 
             while not self._stop_evt.is_set():
-                brightness = self._brightness_from_level(self._get_level())
+                brightness = self._advance_envelope(self._get_level())
                 if brightness != last_brightness:
                     self.device.contrast(brightness)
                     last_brightness = brightness
