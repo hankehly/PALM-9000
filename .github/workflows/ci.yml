@@ -35,8 +35,11 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
+      # --group ADDS to the default groups; `dev` is enabled by default and
+      # carries torch, Jupyter, LangChain and LlamaIndex. --no-default-groups
+      # is what actually restricts this to the lean test group.
       - name: Install dependencies
-        run: uv sync --group test
+        run: uv sync --no-default-groups --group test
 
       - name: Lint (ruff)
         run: uv run --no-sync ruff check --output-format=github main.py palm_9000/ tests/

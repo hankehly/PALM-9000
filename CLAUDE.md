@@ -14,7 +14,7 @@ heartbeat in time with the bot's voice. It speaks Japanese only.
 ## Commands
 
 ```sh
-uv sync --group test                 # install test deps (lean; excludes notebook libs)
+uv sync --no-default-groups --group test   # test deps only (no notebook stack)
 uv run --no-sync pytest              # run the suite (coverage gate: 100%)
 uv run --no-sync pytest --cov --cov-report=term-missing
 uv run --no-sync ruff check --fix main.py palm_9000/ tests/
@@ -23,8 +23,12 @@ PULSE_LATENCY_MSEC=60 uv run --no-dev main.py   # run for real (on the Pi)
 ```
 
 `uv sync` (no flags) pulls the full `dev` group: torch, whisper, langchain,
-llama-index. That is for the notebooks. Use `--group test` for test work and
-`--no-dev` for running on the Pi.
+llama-index. That is for the notebooks.
+
+`--group` *adds* to the default groups rather than replacing them, and `dev`
+is a default, so `uv sync --group test` still installs the whole notebook
+stack (~374 extra packages). Use `--no-default-groups --group test` for test
+work, and `--no-dev` for running on the Pi.
 
 ## Pipeline order matters
 
