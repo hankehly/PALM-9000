@@ -222,6 +222,32 @@ class TestWorkerRegistrationRegression:
         assert "await runner.add_workers(" in source
 
 
+class TestSingleServiceRegression:
+    """The gate must pause the service that is actually in the pipeline."""
+
+    async def test_only_one_gemini_service_is_built(self, wired, monkeypatch):
+        """Two services would leave the pipeline's copy paused forever.
+
+        build_wake_gate receives the same GeminiLiveLLMService that goes
+        into the pipeline. If run_pipeline built a second one, the gate
+        would unpause an orphan while the pipeline's service stayed
+        paused with start_audio_paused=True -- no audio would ever reach
+        Google, the log would look healthy, and the plant would never
+        answer. Same silent-failure family as the two regressions above.
+        """
+        built = []
+
+        def counting_llm(**kwargs):
+            built.append(kwargs)
+            return "LLM"
+
+        monkeypatch.setattr(main_module, "GeminiLiveLLMService", counting_llm)
+
+        await main_module.main()
+
+        assert len(built) == 1, f"run_pipeline built {len(built)} services, expected 1"
+
+
 class TestPipelineOrder:
     async def test_full_processor_order(self, wired):
         await main_module.main()
