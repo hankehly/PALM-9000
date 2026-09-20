@@ -19,6 +19,21 @@ import pytest
 import main as main_module
 
 
+def _settings(**overrides):
+    """A real Settings object with wake-word fields overridden."""
+    from palm_9000.settings import Settings
+
+    base = {
+        "google_api_key": "k",
+        "wake_word_enabled": False,
+        "wake_word_model_path": "models/wakeword/hey_livekit.onnx",
+        "wake_word_threshold": 0.5,
+        "wake_silence_timeout_secs": 30.0,
+    }
+    base.update(overrides)
+    return Settings(_env_file=None, **base)
+
+
 class FakeEventEmitter:
     """Captures handlers registered via the @x.event_handler("name") decorator."""
 
@@ -549,3 +564,156 @@ class TestRunnerFailureKeepsTheTraceback:
         assert not calls["error"], (
             "logger.error drops the traceback; use logger.exception"
         )
+
+
+class TestWakeWordWiring:
+    def test_no_gate_when_disabled(self, monkeypatch):
+        monkeypatch.setattr(
+            main_module, "get_settings", lambda: _settings(wake_word_enabled=False)
+        )
+        assert main_module.build_wake_gate(llm=MagicMock()) is None
+
+    def test_gate_built_when_enabled(self, monkeypatch):
+        monkeypatch.setattr(
+            main_module,
+            "get_settings",
+            lambda: _settings(
+                wake_word_enabled=True,
+                wake_word_threshold=0.71,
+                wake_silence_timeout_secs=17.5,
+            ),
+        )
+        captured = {}
+        monkeypatch.setattr(
+            main_module, "WakeWordGate", lambda **kw: captured.update(kw) or "GATE"
+        )
+
+        class FakeDetector:
+            def __init__(self, path):
+                self.path = path
+                self.loaded = False
+
+            def load(self):
+                self.loaded = True
+
+        monkeypatch.setattr(main_module, "LiveKitWakeWordDetector", FakeDetector)
+
+        assert main_module.build_wake_gate(llm="LLM") == "GATE"
+        assert captured["threshold"] == 0.71
+        assert captured["silence_timeout_secs"] == 17.5
+        assert captured["llm"] == "LLM"
+
+    def test_model_is_loaded_at_build_time(self, monkeypatch):
+        """A missing model must fail at startup, not on the first frame."""
+        monkeypatch.setattr(
+            main_module, "get_settings", lambda: _settings(wake_word_enabled=True)
+        )
+        monkeypatch.setattr(main_module, "WakeWordGate", lambda **kw: "GATE")
+
+        loaded = []
+
+        class FakeDetector:
+            def __init__(self, path):
+                self.path = path
+
+            def load(self):
+                loaded.append(self.path)
+
+        monkeypatch.setattr(main_module, "LiveKitWakeWordDetector", FakeDetector)
+        main_module.build_wake_gate(llm="LLM")
+
+        assert loaded == ["models/wakeword/hey_livekit.onnx"]
+
+    def test_missing_model_raises_at_build_time(self, monkeypatch):
+        monkeypatch.setattr(
+            main_module,
+            "get_settings",
+            lambda: _settings(wake_word_enabled=True, wake_word_model_path="nope.onnx"),
+        )
+        with pytest.raises(FileNotFoundError):
+            main_module.build_wake_gate(llm="LLM")
+
+    def test_pipeline_places_the_gate_before_the_aggregator(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(
+            main_module,
+            "Pipeline",
+            lambda processors: captured.setdefault("p", processors),
+        )
+        transport = MagicMock()
+        transport.input.return_value = "IN"
+        transport.output.return_value = "OUT"
+        aggregators = MagicMock()
+        aggregators.user.return_value = "AGG_USER"
+        aggregators.assistant.return_value = "AGG_ASSISTANT"
+
+        main_module.build_pipeline(
+            transport=transport,
+            llm="LLM",
+            context_aggregator=aggregators,
+            recording_control="CTL",
+            audio_buffer="BUF",
+            wake_gate="GATE",
+        )
+
+        order = captured["p"]
+        assert order.index("IN") < order.index("GATE") < order.index("AGG_USER")
+
+    def test_pipeline_omits_the_gate_when_none(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(
+            main_module,
+            "Pipeline",
+            lambda processors: captured.setdefault("p", processors),
+        )
+        transport = MagicMock()
+        transport.input.return_value = "IN"
+        transport.output.return_value = "OUT"
+        aggregators = MagicMock()
+        aggregators.user.return_value = "AGG_USER"
+        aggregators.assistant.return_value = "AGG_ASSISTANT"
+
+        main_module.build_pipeline(
+            transport=transport,
+            llm="LLM",
+            context_aggregator=aggregators,
+            recording_control="CTL",
+            audio_buffer="BUF",
+            wake_gate=None,
+        )
+
+        assert None not in captured["p"]
+        assert captured["p"][0] == "IN"
+        assert captured["p"][1] == "AGG_USER"
+
+    def test_service_starts_paused_only_when_gating(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(
+            main_module,
+            "GeminiLiveLLMService",
+            lambda **kw: captured.update(kw) or "LLM",
+        )
+
+        monkeypatch.setattr(
+            main_module, "get_settings", lambda: _settings(wake_word_enabled=True)
+        )
+        main_module.build_llm()
+        assert captured["start_audio_paused"] is True
+
+        captured.clear()
+        monkeypatch.setattr(
+            main_module, "get_settings", lambda: _settings(wake_word_enabled=False)
+        )
+        main_module.build_llm()
+        assert captured["start_audio_paused"] is False
+
+    def test_aggregator_gets_a_vad_analyzer(self, monkeypatch):
+        """Without it the silence timer has no activity signal."""
+        captured = {}
+        monkeypatch.setattr(
+            main_module,
+            "LLMContextAggregatorPair",
+            lambda context, **kw: captured.update(kw) or MagicMock(),
+        )
+        main_module.build_context_aggregator()
+        assert captured["user_params"].vad_analyzer is not None

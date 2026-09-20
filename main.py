@@ -1,12 +1,14 @@
 import asyncio
 
 from loguru import logger
+from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
+    LLMUserAggregatorParams,
 )
 from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
 from pipecat.services.google.gemini_live.llm import (
@@ -21,8 +23,9 @@ from pipecat.transports.local.audio import (
 from pipecat.workers.runner import WorkerRunner
 
 from palm_9000.gpio import Max7219AmplitudeHeart
-from palm_9000.processors import AudioRecordingControlProcessor
+from palm_9000.processors import AudioRecordingControlProcessor, WakeWordGate
 from palm_9000.settings import get_settings
+from palm_9000.wakeword import LiveKitWakeWordDetector
 
 IDLE_TIMEOUT_SECS = 10 * 60
 
@@ -76,6 +79,44 @@ def build_llm() -> GeminiLiveLLMService:
             voice=settings.google_multimodal_live_voice_id,
             language=Language.JA,
         ),
+        start_audio_paused=settings.wake_word_enabled,
+    )
+
+
+def build_wake_gate(llm: GeminiLiveLLMService) -> WakeWordGate | None:
+    """The gate, or None when wake-word gating is disabled.
+
+    Returning None rather than a pass-through keeps the disabled path
+    byte-identical to the pre-feature pipeline.
+
+    The model is loaded here, not lazily, so a missing or unreadable model
+    fails at startup. Failing later would leave the gate permanently asleep
+    and the plant permanently mute, which is harder to diagnose.
+    """
+    settings = get_settings()
+    if not settings.wake_word_enabled:
+        return None
+
+    detector = LiveKitWakeWordDetector(settings.wake_word_model_path)
+    detector.load()
+    return WakeWordGate(
+        detector=detector,
+        llm=llm,
+        threshold=settings.wake_word_threshold,
+        silence_timeout_secs=settings.wake_silence_timeout_secs,
+    )
+
+
+def build_context_aggregator() -> LLMContextAggregatorPair:
+    """Aggregators with local VAD.
+
+    GeminiLiveLLMService does not emit user turn frames, so the gate's silence
+    timer needs a local source. vad_analyzer lives on LLMUserAggregatorParams
+    in pipecat 1.x, not on TransportParams.
+    """
+    return LLMContextAggregatorPair(
+        LLMContext(),
+        user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
     )
 
 
@@ -85,6 +126,7 @@ def build_pipeline(
     context_aggregator: LLMContextAggregatorPair,
     recording_control: AudioRecordingControlProcessor,
     audio_buffer: AudioBufferProcessor,
+    wake_gate: WakeWordGate | None = None,
 ) -> Pipeline:
     """Assemble the processor chain. Order is load-bearing.
 
@@ -100,17 +142,18 @@ def build_pipeline(
     they react to bot-speaking frames, which originate downstream. That is
     also why the buffer only ever sees bot audio, never the user's.
     """
-    return Pipeline(
-        [
-            transport.input(),
-            context_aggregator.user(),
-            llm,
-            transport.output(),
-            recording_control,
-            audio_buffer,
-            context_aggregator.assistant(),
-        ]
-    )
+    processors = [transport.input()]
+    if wake_gate is not None:
+        processors.append(wake_gate)
+    processors += [
+        context_aggregator.user(),
+        llm,
+        transport.output(),
+        recording_control,
+        audio_buffer,
+        context_aggregator.assistant(),
+    ]
+    return Pipeline(processors)
 
 
 async def run_pipeline(heart: Max7219AmplitudeHeart) -> None:
@@ -123,14 +166,16 @@ async def run_pipeline(heart: Max7219AmplitudeHeart) -> None:
         # Fires ~94x/sec; keep it off the default INFO level.
         logger.debug(f"Received audio data: {len(audio)} bytes")
 
-    context_aggregator = LLMContextAggregatorPair(LLMContext())
+    context_aggregator = build_context_aggregator()
+    llm = build_llm()
 
     pipeline = build_pipeline(
         transport=build_transport(),
-        llm=build_llm(),
+        llm=llm,
         context_aggregator=context_aggregator,
         recording_control=AudioRecordingControlProcessor(audio_buffer),
         audio_buffer=audio_buffer,
+        wake_gate=build_wake_gate(llm),
     )
 
     task = PipelineWorker(
