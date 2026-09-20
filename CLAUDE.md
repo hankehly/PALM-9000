@@ -165,3 +165,14 @@ command's own line and kill your session. Use a bracket pattern
   ADC0834) are **main** dependencies carrying a `sys_platform == 'linux'`
   marker, so they install on the Pi and are simply absent on a development
   Mac. Tests fake them; see `tests/conftest.py`.
+- Branch names follow the Conventional Branch spec
+  (<https://conventionalbranch.org/>): `<type>/<description>`, where type is
+  one of `feature`, `bugfix`, `hotfix`, `release` or `chore`, and the
+  description is lowercase alphanumerics and hyphens only — e.g.
+  `feature/led-heartbeat`, `bugfix/echo-cancel-source`.
+- Commit messages follow Conventional Commits
+  (<https://www.conventionalcommits.org/>):
+  `<type>[optional scope]: <description>`, with `feat` and `fix` carrying
+  semantic meaning, plus `docs`, `chore`,
+  `refactor`, `test` and friends. Breaking changes take a `!` before the colon
+  or a `BREAKING CHANGE:` footer — e.g. `fix(gpio): defer opening the SPI bus`.
