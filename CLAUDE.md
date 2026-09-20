@@ -94,6 +94,19 @@ regression tests for the two silent-failure bugs above; if you change the
 pipeline wiring, expect `TestRealtimeGateRegression` and
 `TestWorkerRegistrationRegression` to be what catches you.
 
+**Run tests the way CI does — `uv run pytest`, not `python -m pytest`.** The
+two differ: `python -m pytest` injects the working directory into
+`sys.path`, `uv run` does not, and there is no `[build-system]` so the
+project is never installed into the venv. A suite that passes locally under
+`python -m pytest` can fail in CI with `ModuleNotFoundError: No module named
+'palm_9000'`. `pythonpath = ["."]` in `[tool.pytest.ini_options]` is what
+makes both work; do not remove it.
+
+A passing test proves little on its own. Before trusting a regression test,
+reintroduce the bug it covers and confirm the suite goes red. Every
+regression suite here was checked that way, and the mutation counts are
+recorded in the PR that added each one.
+
 ## Hardware
 
 Wiring for the mic, speaker, LED matrix and echo cancellation is documented in
@@ -101,9 +114,21 @@ Wiring for the mic, speaker, LED matrix and echo cancellation is documented in
 
 - The LED matrix is on **SPI0 / CE0**, single module (`cascaded=1`). The `pi`
   user must be in the `spi` group.
-- `Max7219AmplitudeHeart.__init__` opens SPI eagerly, so it cannot be imported
-  on a machine without the bus. Tests patch around this; be careful adding
-  imports of `palm_9000.gpio` to code that runs off-device.
+- `Max7219AmplitudeHeart` opens the bus in `_open_device()`, called from
+  `start()` — **not** in `__init__`. Constructing one therefore works on a
+  machine with no SPI, which is what makes the class testable off-device.
+  Keep it that way; `spidev` is Linux-only, so moving the open back into the
+  constructor would make the class unusable anywhere but the Pi.
+- The render loop must **not** redraw the pattern every frame. The heart is
+  static and only its brightness changes, so `_run()` draws once and writes
+  the intensity register only when the computed brightness actually differs.
+  A steady audio level produces zero SPI traffic; the old per-frame loop did
+  ~90 full-frame flushes and ~90 intensity writes per second. `refresh_secs`
+  (default 5s) redraws occasionally as insurance against the display losing
+  state, and `0` disables that. `TestRedrawIsNotRepeated` enforces all of it.
+- To measure real SPI traffic, wrap the luma device in a proxy that counts
+  `contrast()` and `display()` calls and forwards to the original. That is
+  how the numbers above were taken on actual hardware rather than simulated.
 - Acoustic echo cancellation runs in PulseAudio (`module-echo-cancel`,
   webrtc). The app must capture from `echosource`, not the raw ALSA input, or
   the bot hears itself and talks to itself. Verify with
@@ -148,9 +173,31 @@ Note that rsyncing leaves the Pi's working tree dirty relative to its commit,
 which blocks a later `git pull`. Clear it with `git reset --hard origin/main`
 once the change is committed upstream (`.env` is safe: it is ignored).
 
-When killing a run over SSH, note that `pkill -f main.py` will match the SSH
-command's own line and kill your session. Use a bracket pattern
-(`pkill -f "[m]ain.py"`) and keep the launch command in a separate invocation.
+When killing a run over SSH, `pkill -f main.py` matches the SSH command's own
+line and kills your session. A bracket pattern (`pkill -f "[m]ain.py"`) fixes
+the self-match **only if the literal string is absent from the rest of the
+command** — killing and relaunching in one invocation re-introduces it via the
+launch arguments and kills the session anyway. Put the kill and the launch in
+separate SSH calls.
+
+`pgrep -cf "<pattern>"` has the same trap in reverse: it counts its own
+command line, so a finished process can look like it is still running. Check
+`ps` output or the log instead of trusting the count.
+
+## CI
+
+`.github/workflows/ci.yml` runs on every PR and push to `main`:
+
+- **test** — installs PortAudio (needed by `pipecat-ai[local]` → pyaudio),
+  then `ruff check`, `ruff format --check`, and pytest with the 100% gate.
+- **lockfile** — `uv lock --check`. The lockfile is what actually pins
+  pipecat for deploys to the Pi, so drift between it and `pyproject.toml`
+  means the Pi installs something the tests never saw. Run `uv lock` after
+  touching dependencies.
+
+CI needs a `GOOGLE_API_KEY` to exist because `palm_9000/settings.py`
+constructs `Settings()` at import time; the workflow sets a placeholder. No
+request is ever made with it.
 
 ## Conventions
 
