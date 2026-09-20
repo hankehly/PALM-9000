@@ -128,3 +128,69 @@ class TestAdc0834IsAProductionDependency:
         spidev = next(d for d in main_deps if "spidev" in d)
         rpi = next(d for d in main_deps if "rpi-gpio" in d)
         assert spidev.split(";")[1].strip() == rpi.split(";")[1].strip()
+
+
+class TestSettingsAreLoadedLazily:
+    """Importing the package must not require configuration.
+
+    Settings() used to run at import time, so `import palm_9000.settings`
+    raised without a GOOGLE_API_KEY. That is why conftest and CI both set a
+    placeholder.
+    """
+
+    NO_CONFIG = {
+        "PATH": "/usr/bin:/bin",
+        "PYTHONPATH": str(PROJECT_ROOT),
+        # deliberately no GOOGLE_API_KEY
+    }
+
+    def run_without_config(self, code):
+        return subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            # Run outside the repo so its own .env is not picked up.
+            cwd="/",
+            env=self.NO_CONFIG,
+        )
+
+    def test_module_imports_without_an_api_key(self):
+        result = self.run_without_config(
+            "import palm_9000.settings\nprint('IMPORT_OK')\n"
+        )
+        assert "IMPORT_OK" in result.stdout, result.stderr
+
+    def test_get_settings_raises_only_when_called(self):
+        result = self.run_without_config(
+            "from palm_9000.settings import get_settings\n"
+            "print('IMPORT_OK')\n"
+            "try:\n"
+            "    get_settings()\n"
+            "except Exception as exc:\n"
+            "    print('RAISED_ON_CALL', type(exc).__name__)\n"
+        )
+        assert "IMPORT_OK" in result.stdout, result.stderr
+        assert "RAISED_ON_CALL" in result.stdout, result.stderr
+
+    def test_legacy_module_level_name_still_resolves(self):
+        """Notebooks use `from palm_9000.settings import settings`."""
+        env = dict(self.NO_CONFIG)
+        env["GOOGLE_API_KEY"] = "k"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from palm_9000.settings import settings\n"
+                "print('VOICE', settings.google_multimodal_live_voice_id)\n",
+            ],
+            capture_output=True,
+            text=True,
+            cwd="/",
+            env=env,
+        )
+        assert "VOICE Puck" in result.stdout, result.stderr
+
+    def test_settings_are_cached(self):
+        from palm_9000.settings import get_settings
+
+        assert get_settings() is get_settings()

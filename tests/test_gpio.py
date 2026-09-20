@@ -234,32 +234,32 @@ class TestLevelClamping:
 class TestBrightness:
     def test_silence_maps_to_min_brightness(self, fake_hardware):
         h = Max7219AmplitudeHeart(min_brightness=7, ema=1.0)
-        assert h._brightness_from_level(0.0) == 7
+        assert h._advance_envelope(0.0) == 7
 
     def test_full_level_maps_to_max_brightness(self, fake_hardware):
         h = Max7219AmplitudeHeart(min_brightness=0, max_brightness=255, ema=1.0)
-        assert h._brightness_from_level(1.0) == 255
+        assert h._advance_envelope(1.0) == 255
 
     def test_applies_gamma_correction(self, fake_hardware):
         h = Max7219AmplitudeHeart(
             min_brightness=0, max_brightness=255, ema=1.0, gamma=2.0
         )
         # perceptual = level ** (1/gamma)
-        assert h._brightness_from_level(0.25) == int(math.sqrt(0.25) * 255)
+        assert h._advance_envelope(0.25) == int(math.sqrt(0.25) * 255)
 
     def test_ema_smooths_toward_the_target(self, fake_hardware):
         h = Max7219AmplitudeHeart(
             min_brightness=0, max_brightness=255, ema=0.5, gamma=1.0
         )
-        first = h._brightness_from_level(1.0)
-        second = h._brightness_from_level(1.0)
+        first = h._advance_envelope(1.0)
+        second = h._advance_envelope(1.0)
         assert first == int(0.5 * 255)
         assert second > first  # converging upward
 
     def test_result_stays_within_bounds(self, fake_hardware):
         h = Max7219AmplitudeHeart(min_brightness=10, max_brightness=200)
         for level in (0.0, 0.1, 0.5, 0.9, 1.0):
-            assert 10 <= h._brightness_from_level(level) <= 200
+            assert 10 <= h._advance_envelope(level) <= 200
 
 
 class TestDrawHeart:
@@ -510,3 +510,295 @@ class TestRedrawIsNotRepeated:
         await heart.stop()
 
         assert heart.device.displays == 1
+
+
+class TestContextManager:
+    async def test_aenter_starts_and_aexit_stops(self, fake_hardware):
+        heart = Max7219AmplitudeHeart(fps=1000)
+        async with heart as entered:
+            assert entered is heart
+            assert heart._task is not None
+        assert heart._task is None
+
+    async def test_exit_runs_even_when_the_body_raises(self, fake_hardware):
+        heart = Max7219AmplitudeHeart(fps=1000)
+        with pytest.raises(RuntimeError):
+            async with heart:
+                raise RuntimeError("boom")
+        assert heart._task is None
+        assert heart.device.contrasts[-1] == 0
+
+
+class TestBlank:
+    def test_is_a_noop_when_no_device_was_opened(self, fake_hardware):
+        Max7219AmplitudeHeart()._blank()  # must not raise
+
+    def test_logs_instead_of_raising_when_the_bus_fails(
+        self, fake_hardware, monkeypatch
+    ):
+        """Swallowing the error is only acceptable because it is logged.
+
+        Asserting merely that _blank() does not raise would leave the
+        diagnostic unprotected: deleting the logger.debug call entirely still
+        passes such a test, and the silent-shutdown behaviour this PR removes
+        could come straight back.
+        """
+        messages = []
+        monkeypatch.setattr(
+            gpio_module.logger, "debug", lambda msg, *a, **kw: messages.append(msg)
+        )
+
+        heart = Max7219AmplitudeHeart()
+        heart._open_device()
+
+        def boom(_value):
+            raise OSError("SPI went away")
+
+        monkeypatch.setattr(heart.device, "contrast", boom)
+        heart._blank()  # swallowed, not raised
+
+        assert messages, "the SPI failure was swallowed without a diagnostic"
+        assert "SPI went away" in messages[0], messages
+        assert "blank" in messages[0].lower(), messages
+
+    def test_turns_the_display_off(self, fake_hardware):
+        heart = Max7219AmplitudeHeart()
+        heart._open_device()
+        heart._blank()
+        assert heart.device.contrasts[-1] == 0
+        assert heart.device.cleared >= 1
+
+
+class TestStopDoesNotMaskTheRealError:
+    """A failed render task must not replace the error being unwound.
+
+    stop() awaits the render task. If that task already raised -- say the SPI
+    bus disconnected and _draw_heart() failed -- re-awaiting it re-raises
+    inside __aexit__, which would discard whatever the body was failing with.
+    """
+
+    async def test_render_failure_does_not_replace_the_body_error(
+        self, fake_hardware, monkeypatch
+    ):
+        heart = Max7219AmplitudeHeart(fps=1000)
+
+        def explode():
+            raise OSError("SPI bus disconnected")
+
+        with pytest.raises(RuntimeError, match="the real problem"):
+            async with heart:
+                # Make the render loop die the way a yanked cable would.
+                monkeypatch.setattr(heart, "_draw_heart", explode)
+                heart._stop_evt.clear()
+                await asyncio.sleep(0.02)
+                raise RuntimeError("the real problem")
+
+    async def test_render_failure_alone_does_not_escape_stop(
+        self, fake_hardware, monkeypatch
+    ):
+        """Even with no body error, shutdown should not raise."""
+        heart = Max7219AmplitudeHeart(fps=1000)
+        await heart.start()
+
+        async def failing_run():
+            raise OSError("SPI bus disconnected")
+
+        heart._task = asyncio.create_task(failing_run())
+        await asyncio.sleep(0.01)
+
+        await heart.stop()  # must not raise
+        assert heart._task is None
+
+    async def test_the_render_failure_is_still_logged(self, fake_hardware, monkeypatch):
+        """Swallowed is not the same as hidden."""
+        records = []
+        monkeypatch.setattr(
+            gpio_module.logger, "exception", lambda msg, *a, **kw: records.append(msg)
+        )
+
+        heart = Max7219AmplitudeHeart(fps=1000)
+        await heart.start()
+
+        async def failing_run():
+            raise OSError("SPI bus disconnected")
+
+        heart._task = asyncio.create_task(failing_run())
+        await asyncio.sleep(0.01)
+        await heart.stop()
+
+        assert records, "the render task failure vanished without a trace"
+        assert any("render task failed" in m.lower() for m in records), records
+
+    async def test_failure_during_cancellation_is_also_contained(
+        self, fake_hardware, monkeypatch
+    ):
+        """A task that refuses to stop, then fails while being cancelled.
+
+        asyncio.wait_for cancels the task itself on timeout and re-raises
+        whatever the task ended with, so this arrives as an OSError rather
+        than a TimeoutError.
+        """
+        records = []
+        monkeypatch.setattr(
+            gpio_module.logger, "exception", lambda msg, *a, **kw: records.append(msg)
+        )
+
+        heart = Max7219AmplitudeHeart(fps=1000)
+        await heart.start()
+
+        async def stubborn():
+            try:
+                await asyncio.sleep(30)  # ignores _stop_evt, so stop() times out
+            except asyncio.CancelledError:
+                raise OSError("bus died while shutting down") from None
+
+        heart._task = asyncio.create_task(stubborn())
+        await asyncio.sleep(0.01)
+
+        await heart.stop()  # must not raise
+
+        assert heart._task is None
+        # wait_for re-raises the task's own error instead of TimeoutError,
+        # so this lands in stop()'s general handler.
+        assert any("render task failed" in m.lower() for m in records), records
+
+    async def test_a_render_task_raising_timeouterror_is_also_contained(
+        self, fake_hardware, monkeypatch
+    ):
+        """TimeoutError from the task must not be mistaken for a real timeout.
+
+        TimeoutError subclasses OSError, so an SPI or socket timeout inside
+        the render loop surfaces from wait_for looking exactly like the grace
+        period expiring. Re-awaiting the task then re-raised it past both
+        handlers and out of stop().
+        """
+        records = []
+        monkeypatch.setattr(
+            gpio_module.logger, "exception", lambda msg, *a, **kw: records.append(msg)
+        )
+
+        heart = Max7219AmplitudeHeart(fps=1000)
+        await heart.start()
+
+        async def times_out():
+            raise TimeoutError("SPI read timed out")
+
+        heart._task = asyncio.create_task(times_out())
+        await asyncio.sleep(0.01)
+
+        await heart.stop()  # must not raise
+
+        assert heart._task is None
+        assert records, "the TimeoutError vanished without a trace"
+        assert any("render task failed" in m.lower() for m in records), records
+
+    async def test_task_timeouterror_does_not_replace_the_body_error(
+        self, fake_hardware, monkeypatch
+    ):
+        heart = Max7219AmplitudeHeart(fps=1000)
+
+        async def times_out():
+            raise TimeoutError("SPI read timed out")
+
+        with pytest.raises(RuntimeError, match="the real problem"):
+            async with heart:
+                heart._task.cancel()
+                heart._task = asyncio.create_task(times_out())
+                await asyncio.sleep(0.01)
+                raise RuntimeError("the real problem")
+
+    async def test_cancelling_the_caller_of_stop_propagates_with_the_real_loop(
+        self, fake_hardware
+    ):
+        """The production path: _run() suppresses CancelledError.
+
+        wait_for cancels _run, _run swallows it and returns normally, and
+        wait_for then returns that result -- so a cancellation of the task
+        executing stop() disappears entirely unless stop() re-raises it.
+
+        A test that substitutes a coroutine which does NOT suppress
+        cancellation passes without exercising this at all.
+        """
+        # fps=1 keeps _run parked in its sleep, so stop() is still inside
+        # wait_for when the cancellation lands.
+        heart = Max7219AmplitudeHeart(fps=1)
+        await heart.start()
+        await asyncio.sleep(0.01)
+
+        stopping = asyncio.create_task(heart.stop())
+        await asyncio.sleep(0.01)
+        stopping.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await stopping
+
+    async def test_cancelling_the_caller_of_stop_propagates(self, fake_hardware):
+        """Cancelling the task that is running stop() must still cancel it.
+
+        An earlier version of this test cancelled the *render* task rather
+        than a task executing stop(), so it never exercised the behaviour its
+        name claimed. CancelledError is a BaseException, so it passes through
+        stop()'s `except Exception` untouched.
+        """
+        heart = Max7219AmplitudeHeart(fps=1000)
+        await heart.start()
+
+        async def slow_to_stop():
+            # Outlasts the grace period, so stop() is genuinely blocked in
+            # wait_for at the moment we cancel it.
+            await asyncio.sleep(30)
+
+        render_task = asyncio.create_task(slow_to_stop())
+        heart._task = render_task
+
+        stopping = asyncio.create_task(heart.stop())
+        await asyncio.sleep(0.01)  # let stop() reach wait_for
+        stopping.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await stopping
+
+        # wait_for cancels the task it was awaiting when it is itself
+        # cancelled, so the render task should not be left running.
+        await asyncio.sleep(0)
+        assert render_task.cancelled() or render_task.done()
+
+    async def test_a_previously_handled_cancellation_is_not_resurrected(
+        self, fake_hardware
+    ):
+        """Task.cancelling() is cumulative, not a flag for this call.
+
+        A caller that was cancelled once, caught it and deliberately carried
+        on still reports cancelling() == 1 forever after. Treating that as
+        evidence that *this* stop() was cancelled synthesizes a bogus
+        CancelledError -- and from __aexit__ it replaces the body's real
+        exception, which is precisely what stop() exists to avoid.
+        """
+        heart = Max7219AmplitudeHeart(fps=1000)
+        outcome = {}
+
+        async def caller():
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                pass  # handled on purpose; cancelling() stays at 1
+            try:
+                async with heart:
+                    await asyncio.sleep(0.01)
+                    raise RuntimeError("the real problem")
+            except BaseException as exc:
+                outcome["raised"] = exc
+                raise
+
+        task = asyncio.create_task(caller())
+        await asyncio.sleep(0.01)
+        task.cancel()
+
+        # With the stale-count bug the body's RuntimeError is replaced by a
+        # synthesized CancelledError, so this is the assertion that bites.
+        with pytest.raises(RuntimeError, match="the real problem"):
+            await task
+
+        assert isinstance(outcome.get("raised"), RuntimeError), (
+            f"expected the body's RuntimeError, got {outcome.get('raised')!r}"
+        )
