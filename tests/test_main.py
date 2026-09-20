@@ -508,3 +508,44 @@ class TestNamedConstants:
 
     def test_idle_timeout_is_ten_minutes(self):
         assert main_module.IDLE_TIMEOUT_SECS == 600
+
+
+class TestRunnerFailureKeepsTheTraceback:
+    """logger.exception, not logger.error.
+
+    Preserving the traceback is one of this PR's stated fixes, but the
+    existing runner-failure test only checks that the heart stops -- swapping
+    logger.exception back to logger.error leaves it green, so the fix could
+    silently regress.
+    """
+
+    async def test_runner_failure_is_logged_with_its_traceback(
+        self, wired, monkeypatch
+    ):
+        calls = {"exception": [], "error": []}
+        monkeypatch.setattr(
+            main_module.logger,
+            "exception",
+            lambda msg, *a, **kw: calls["exception"].append(msg),
+        )
+        monkeypatch.setattr(
+            main_module.logger,
+            "error",
+            lambda msg, *a, **kw: calls["error"].append(msg),
+        )
+
+        async def failing_run(self):
+            self.ran += 1
+            raise RuntimeError("pipeline exploded")
+
+        monkeypatch.setattr(FakeRunner, "run", failing_run)
+        await main_module.main()
+
+        assert calls["exception"], (
+            "runner failure must be logged with logger.exception so the "
+            "traceback survives"
+        )
+        assert "Pipeline error" in calls["exception"][0]
+        assert not calls["error"], (
+            "logger.error drops the traceback; use logger.exception"
+        )

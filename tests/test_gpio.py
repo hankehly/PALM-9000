@@ -762,3 +762,43 @@ class TestStopDoesNotMaskTheRealError:
         # cancelled, so the render task should not be left running.
         await asyncio.sleep(0)
         assert render_task.cancelled() or render_task.done()
+
+    async def test_a_previously_handled_cancellation_is_not_resurrected(
+        self, fake_hardware
+    ):
+        """Task.cancelling() is cumulative, not a flag for this call.
+
+        A caller that was cancelled once, caught it and deliberately carried
+        on still reports cancelling() == 1 forever after. Treating that as
+        evidence that *this* stop() was cancelled synthesizes a bogus
+        CancelledError -- and from __aexit__ it replaces the body's real
+        exception, which is precisely what stop() exists to avoid.
+        """
+        heart = Max7219AmplitudeHeart(fps=1000)
+        outcome = {}
+
+        async def caller():
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                pass  # handled on purpose; cancelling() stays at 1
+            try:
+                async with heart:
+                    await asyncio.sleep(0.01)
+                    raise RuntimeError("the real problem")
+            except BaseException as exc:
+                outcome["raised"] = exc
+                raise
+
+        task = asyncio.create_task(caller())
+        await asyncio.sleep(0.01)
+        task.cancel()
+
+        # With the stale-count bug the body's RuntimeError is replaced by a
+        # synthesized CancelledError, so this is the assertion that bites.
+        with pytest.raises(RuntimeError, match="the real problem"):
+            await task
+
+        assert isinstance(outcome.get("raised"), RuntimeError), (
+            f"expected the body's RuntimeError, got {outcome.get('raised')!r}"
+        )
