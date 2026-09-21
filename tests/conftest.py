@@ -131,6 +131,7 @@ def env(monkeypatch):
         "WAKE_SILENCE_TIMEOUT_SECS",
         "WAKE_WORD_HOP_SAMPLES",
         "WAKE_WORD_HALF_DUPLEX",
+        "SYSTEM_INSTRUCTION_FILE",
     ):
         monkeypatch.delenv(name, raising=False)
     return monkeypatch

@@ -326,6 +326,80 @@ class TestSystemInstruction:
     def test_requests_japanese_only_output(self):
         assert "日本語" in main_module.SYSTEM_INSTRUCTION
 
+    def test_asks_for_short_answers(self):
+        """Every sentence is spoken aloud, and with half-duplex gating the
+        microphone is paused for all of it."""
+        assert "簡潔" in main_module.SYSTEM_INSTRUCTION
+
+    def test_asks_for_plain_form_not_keigo(self):
+        """Left to itself Gemini answers in business keigo ("感じております"),
+        which is wrong for something that sits in a room watching you."""
+        assert "常体" in main_module.SYSTEM_INSTRUCTION
+        assert "敬語は一切使わないでください" in main_module.SYSTEM_INSTRUCTION
+
+    def test_asks_for_simple_language(self):
+        """Named rather than paraphrased: やさしい日本語 is an established
+        register, so the model has a real target rather than a vague
+        instruction to simplify."""
+        assert "やさしい日本語" in main_module.SYSTEM_INSTRUCTION
+
+
+class TestSystemInstructionOverride:
+    """SYSTEM_INSTRUCTION_FILE, for trying wording without a redeploy."""
+
+    def test_uses_the_builtin_when_unset(self, monkeypatch):
+        monkeypatch.setattr(main_module, "get_settings", lambda: _settings())
+        assert main_module.build_system_instruction() == main_module.SYSTEM_INSTRUCTION
+
+    def test_reads_the_file_when_set(self, monkeypatch, tmp_path):
+        prompt = tmp_path / "prompt.txt"
+        prompt.write_text("あなたは寡黙な植物です。\n", encoding="utf-8")
+        monkeypatch.setattr(
+            main_module,
+            "get_settings",
+            lambda: _settings(system_instruction_file=str(prompt)),
+        )
+
+        assert main_module.build_system_instruction() == "あなたは寡黙な植物です。"
+
+    def test_a_missing_file_is_fatal(self, monkeypatch, tmp_path):
+        """Falling back would be worse than useless: you would believe you
+        were testing new wording while listening to the old."""
+        monkeypatch.setattr(
+            main_module,
+            "get_settings",
+            lambda: _settings(system_instruction_file=str(tmp_path / "nope.txt")),
+        )
+        with pytest.raises(FileNotFoundError, match="nope.txt"):
+            main_module.build_system_instruction()
+
+    def test_an_empty_file_is_fatal(self, monkeypatch, tmp_path):
+        """An empty instruction is a different personality, not an absent
+        one, so it must not pass silently."""
+        prompt = tmp_path / "blank.txt"
+        prompt.write_text("   \n\n", encoding="utf-8")
+        monkeypatch.setattr(
+            main_module,
+            "get_settings",
+            lambda: _settings(system_instruction_file=str(prompt)),
+        )
+        with pytest.raises(ValueError, match="empty"):
+            main_module.build_system_instruction()
+
+    async def test_the_override_reaches_the_service(self, wired, monkeypatch, tmp_path):
+        """The whole point: what the file says is what Gemini gets."""
+        prompt = tmp_path / "prompt.txt"
+        prompt.write_text("短く答えてください。", encoding="utf-8")
+        monkeypatch.setattr(
+            main_module,
+            "get_settings",
+            lambda: _settings(system_instruction_file=str(prompt)),
+        )
+
+        await main_module.main()
+
+        assert wired["llm_kwargs"]["system_instruction"] == "短く答えてください。"
+
 
 class TestHeartLifecycle:
     async def test_heart_is_started_and_stopped(self, wired):
