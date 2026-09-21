@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 
 from loguru import logger
 from pipecat.frames.frames import LLMRunFrame
@@ -39,12 +40,18 @@ AUDIO_OUT_10MS_CHUNKS = 8
 # 512 bytes is ~10.7 ms at 24 kHz mono int16, so on_audio_data fires ~94x/sec.
 AUDIO_BUFFER_SIZE = 512
 
+# Brevity is not only a style choice. Every sentence is spoken aloud, and
+# with half-duplex gating the microphone is paused for the whole of it, so a
+# long answer is also a long stretch where the plant cannot hear you.
 SYSTEM_INSTRUCTION = (
     "You are PALM-9000, a self-aware houseplant powered by an advanced AI. "
     "You speak in layman's terms with an eerie quality, "
     "as if you know more than you let on. "
     "すべて日本語で出力してください。翻訳・英訳・ローマ字・ふりがな・注釈・補足は一切表示しないでください。"
     "括弧（）の使用も避けてください。"
+    "返答は必ず簡潔にしてください。原則1〜2文、長くても3文までです。"
+    "聞かれたことにだけ答えてください。"
+    "前置き、相づち、質問の言い換え、最後のまとめは不要です。"
 )
 
 
@@ -63,6 +70,45 @@ def build_transport() -> LocalAudioTransport:
     )
 
 
+def build_system_instruction() -> str:
+    """The built-in personality, or an override read from a file.
+
+    Set `SYSTEM_INSTRUCTION_FILE` to a text file to try wording without
+    editing this module, committing, or redeploying:
+
+        nano /tmp/prompt.txt
+        SYSTEM_INSTRUCTION_FILE=/tmp/prompt.txt uv run --no-dev main.py
+
+    A missing, unreadable or empty file is fatal rather than a fall back to
+    the built-in text. Falling back would be worse than useless here: you
+    would believe you were testing the new wording while actually listening
+    to the old one, and nothing in the plant's behaviour would say so.
+
+    pipecat already logs the instruction it sends at startup ("Setting
+    system instruction: ..."), so the log is the authority on what the model
+    actually received. The line below only records where it came from.
+    """
+    path = get_settings().system_instruction_file
+    if path is None:
+        return SYSTEM_INSTRUCTION
+
+    file = Path(path)
+    if not file.is_file():
+        raise FileNotFoundError(
+            f"SYSTEM_INSTRUCTION_FILE is set to {file}, which does not exist. "
+            "Refusing to fall back to the built-in personality: you would be "
+            "testing wording you did not write."
+        )
+    text = file.read_text(encoding="utf-8").strip()
+    if not text:
+        raise ValueError(
+            f"SYSTEM_INSTRUCTION_FILE {file} is empty. An empty system "
+            "instruction is a different personality, not an absent one."
+        )
+    logger.info(f"System instruction overridden from {file}")
+    return text
+
+
 def build_llm() -> GeminiLiveLLMService:
     """The Gemini Live service, configured from settings.
 
@@ -72,7 +118,7 @@ def build_llm() -> GeminiLiveLLMService:
     settings = get_settings()
     return GeminiLiveLLMService(
         api_key=settings.google_api_key.get_secret_value(),
-        system_instruction=SYSTEM_INSTRUCTION,
+        system_instruction=build_system_instruction(),
         settings=GeminiLiveLLMSettings(
             model=settings.gemini_live_model,
             voice=settings.google_multimodal_live_voice_id,

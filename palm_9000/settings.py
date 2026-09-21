@@ -9,6 +9,12 @@ class Settings(BaseSettings):
     google_multimodal_live_voice_id: str = "Puck"
     gemini_live_model: str = "models/gemini-3.8-live"
 
+    # Read the system instruction from this file instead of main.py's
+    # built-in text. For iterating on the personality without editing code
+    # or redeploying; unset in normal operation. A missing or empty file is
+    # fatal rather than a silent fall back -- see build_system_instruction.
+    system_instruction_file: str | None = None
+
     # Wake-word gating. Disabled by default: with it off the app behaves
     # exactly as before and streams audio continuously while running.
     wake_word_enabled: bool = False
