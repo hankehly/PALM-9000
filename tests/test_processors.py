@@ -16,6 +16,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection
 
+from palm_9000 import processors as processors_module
 from palm_9000.processors import AudioRecordingControlProcessor, WakeWordGate
 
 
@@ -323,21 +324,87 @@ class TestWakeWordGate:
 
         assert llm.paused_calls == [False, True], "must still sleep once truly idle"
 
-    async def test_every_frame_is_forwarded(self, clock):
+    @pytest.mark.parametrize("wake_first", [False, True], ids=["asleep", "awake"])
+    async def test_non_audio_frames_are_always_forwarded(self, clock, wake_first):
+        """Only user audio is gated; every other frame is a pass-through.
+
+        Half of the old test_every_frame_is_forwarded. It keeps the part
+        that killed the hardcoded-direction mutant: each frame is asserted
+        to arrive downstream paired with the direction it came in on, so
+        pushing everything DOWNSTREAM (or dropping the direction argument
+        altogether) fails on the UPSTREAM entries. The audio half of that
+        test is now test_audio_is_dropped_while_asleep and
+        test_audio_is_forwarded_once_awake, which assert the opposite of
+        each other and so could not have stayed in one list.
+        """
         detector, llm = FakeDetector([0.9]), FakeLLM()
         gate = make_gate(detector, llm, clock)
-        sent = [
-            (audio_frame(), FrameDirection.DOWNSTREAM),
-            (TextFrame(text="hi"), FrameDirection.DOWNSTREAM),
-            (BotStoppedSpeakingFrame(), FrameDirection.UPSTREAM),
-        ]
+        if wake_first:
+            await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+            assert gate._awake is True
+            gate.pushed.clear()
 
+        sent = [
+            (TextFrame(text="down"), FrameDirection.DOWNSTREAM),
+            (TextFrame(text="up"), FrameDirection.UPSTREAM),
+            (BotStartedSpeakingFrame(), FrameDirection.DOWNSTREAM),
+            (BotStoppedSpeakingFrame(), FrameDirection.UPSTREAM),
+            (UserStartedSpeakingFrame(), FrameDirection.UPSTREAM),
+            (EndFrame(), FrameDirection.DOWNSTREAM),
+        ]
         for frame, direction in sent:
             await gate.process_frame(frame, direction)
 
         assert gate.pushed == sent, (
-            "frames must be forwarded in the direction they arrived"
+            "non-audio frames must be forwarded in the direction they arrived"
         )
+
+    async def test_audio_is_dropped_while_asleep(self, clock):
+        """The core promise: nothing downstream ever sees pre-wake audio.
+
+        Pausing the service is not enough on its own - a paused flag lives
+        on a processor further down the pipeline, and audio already in
+        flight is judged by that flag when it *arrives*. A frame the gate
+        never pushes cannot leak however long it sits in a queue.
+        """
+        detector, llm = FakeDetector([0.1, 0.1]), FakeLLM()
+        gate = make_gate(detector, llm, clock)
+
+        await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+        await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+
+        assert gate.pushed == [], "no user audio may leave the gate while asleep"
+        assert detector.seen == 2, "but the detector must still hear it"
+
+    async def test_audio_is_forwarded_once_awake(self, clock):
+        """The other half: gating off means the audio actually flows.
+
+        Without this, dropping unconditionally would pass every other test
+        in the file.
+        """
+        detector, llm = FakeDetector([0.9]), FakeLLM()
+        gate = make_gate(detector, llm, clock)
+        waking, after = audio_frame(), audio_frame()
+
+        await gate.process_frame(waking, FrameDirection.DOWNSTREAM)
+        await gate.process_frame(after, FrameDirection.DOWNSTREAM)
+
+        assert gate.pushed == [
+            (waking, FrameDirection.DOWNSTREAM),
+            (after, FrameDirection.DOWNSTREAM),
+        ], "the waking frame and everything after it must go through"
+
+    async def test_the_frame_that_trips_the_timeout_is_dropped(self, clock):
+        """Falling asleep takes effect on the very frame that caused it."""
+        detector, llm = FakeDetector([0.9]), FakeLLM()
+        gate = make_gate(detector, llm, clock)
+        waking = audio_frame()
+        await gate.process_frame(waking, FrameDirection.DOWNSTREAM)
+
+        clock.advance(31.0)
+        await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+
+        assert gate.pushed == [(waking, FrameDirection.DOWNSTREAM)]
 
     async def test_detector_failure_keeps_it_asleep(self, clock):
         class Exploding(FakeDetector):
@@ -350,7 +417,7 @@ class TestWakeWordGate:
         await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
 
         assert llm.paused_calls == [], "must fail closed"
-        assert len(gate.pushed) == 1, "frame must still be forwarded"
+        assert gate.pushed == [], "and closed means the audio is dropped too"
 
     async def test_activity_frames_are_ignored_while_asleep(self, clock):
         """A bot frame must not extend a deadline that is not running.
@@ -545,3 +612,162 @@ class TestHalfDuplex:
         await gate.process_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
 
         assert llm.paused_calls == [False, True, True], "the next frame retries it"
+
+    async def test_mic_audio_is_dropped_while_the_bot_speaks(self, clock):
+        """Half-duplex drops the audio as well as pausing the service.
+
+        Echo cannot be read as a barge-in by Gemini's server-side VAD if the
+        echo never leaves this processor.
+        """
+        detector, llm = FakeDetector([0.9]), FakeLLM()
+        gate = make_gate(detector, llm, clock)
+        await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)  # wake
+        await gate.process_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+        gate.pushed.clear()
+
+        await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+
+        assert gate.pushed == [], "no mic audio may leave the gate mid-reply"
+        assert gate._awake is True, "dropping is not falling asleep"
+
+        await gate.process_frame(BotStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
+        resumed = audio_frame()
+        await gate.process_frame(resumed, FrameDirection.DOWNSTREAM)
+
+        assert gate.pushed[-1] == (resumed, FrameDirection.DOWNSTREAM), (
+            "and the reply ending resumes it"
+        )
+
+    async def test_disabled_keeps_forwarding_audio_through_the_reply(self, clock):
+        """half_duplex=False: the bot speaking gates nothing, as before.
+
+        Pins the drop to the same condition as the pause rather than to
+        _bot_speaking on its own - barge-in hardware must keep its audio.
+        """
+        detector, llm = FakeDetector([0.9]), FakeLLM()
+        gate = make_gate(detector, llm, clock, half_duplex=False)
+        await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)  # wake
+        await gate.process_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+        gate.pushed.clear()
+
+        during = audio_frame()
+        await gate.process_frame(during, FrameDirection.DOWNSTREAM)
+
+        assert gate.pushed == [(during, FrameDirection.DOWNSTREAM)]
+
+    async def test_a_refused_pause_still_drops_the_audio(self, clock):
+        """Defence in depth: the drop must not depend on the pause landing.
+
+        _paused records only what the service accepted. If the pause raised,
+        the gate is awake with _paused still False - and that is exactly the
+        moment the microphone must not be open. Deciding on the gate's own
+        state (awake, bot_speaking) rather than on _paused is what makes the
+        two mechanisms independent.
+        """
+
+        class ExplodingLLM(FakeLLM):
+            def __init__(self):
+                super().__init__()
+                self.explode = False
+
+            def set_audio_input_paused(self, paused):
+                super().set_audio_input_paused(paused)
+                if self.explode:
+                    raise RuntimeError("websocket is gone")
+
+        llm = ExplodingLLM()
+        gate = make_gate(FakeDetector([0.9]), llm, clock)
+        await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)  # wake
+
+        llm.explode = True
+        with pytest.raises(RuntimeError):
+            await gate.process_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+        assert gate._paused is False, "the service never took the pause"
+        gate.pushed.clear()
+
+        await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+
+        assert gate.pushed == [], "the gate drops it anyway"
+
+
+class TestThroughputDiagnostic:
+    """Every 250 audio frames - exactly 5.0s of 20ms audio - report the wait.
+
+    The gate is marginal by construction on a Zero 2W: the detector costs
+    ~400-600ms per scoring pass and runs every 500ms. Nothing else in the
+    log says whether it is keeping up, and falling behind means audio
+    queueing somewhere upstream.
+    """
+
+    @staticmethod
+    def _capture(monkeypatch):
+        """Collect logger.debug lines about throughput (pause lines share it)."""
+        messages = []
+        monkeypatch.setattr(
+            processors_module.logger,
+            "debug",
+            lambda msg, *a, **kw: messages.append(msg),
+        )
+        return messages
+
+    @staticmethod
+    def _throughput(messages):
+        return [m for m in messages if "audio frames" in m]
+
+    async def test_logs_once_every_250_frames(self, clock, monkeypatch):
+        """249 frames say nothing; the 250th reports the elapsed 5.00s.
+
+        The clock is the injected one, so a diagnostic reading
+        time.monotonic directly would report ~0.00s here and fail.
+        """
+        messages = self._capture(monkeypatch)
+        gate = make_gate(FakeDetector(), FakeLLM(), clock)
+
+        for _ in range(249):
+            clock.advance(0.02)
+            await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+
+        assert self._throughput(messages) == [], "nothing before the 250th frame"
+
+        clock.advance(0.02)
+        await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+
+        assert self._throughput(messages) == [
+            "250 audio frames in 5.00s (5.00s = realtime)"
+        ]
+        assert gate.pushed == [], "dropped frames still count towards the total"
+
+    async def test_the_next_interval_starts_at_the_last_log(self, clock, monkeypatch):
+        """The second reading is since the first, not since startup.
+
+        A diagnostic that never moved its mark would print 15.00s here,
+        which is the difference between "the gate stalled" and "the gate
+        stalled once, ten seconds ago".
+        """
+        messages = self._capture(monkeypatch)
+        gate = make_gate(FakeDetector(), FakeLLM(), clock)
+
+        for _ in range(250):
+            clock.advance(0.02)
+            await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+        for _ in range(250):  # the same 5.0s of audio, taking 10.0s to arrive
+            clock.advance(0.04)
+            await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+
+        assert self._throughput(messages) == [
+            "250 audio frames in 5.00s (5.00s = realtime)",
+            "250 audio frames in 10.00s (5.00s = realtime)",
+        ]
+
+    async def test_non_audio_frames_are_not_counted(self, clock, monkeypatch):
+        """It measures the audio path, not general frame traffic."""
+        messages = self._capture(monkeypatch)
+        gate = make_gate(FakeDetector(), FakeLLM(), clock)
+
+        for _ in range(249):
+            clock.advance(0.02)
+            await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+        for _ in range(10):
+            await gate.process_frame(TextFrame(text="noise"), FrameDirection.DOWNSTREAM)
+
+        assert self._throughput(messages) == []
