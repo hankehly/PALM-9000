@@ -155,6 +155,13 @@ class WakeWordGate(FrameProcessor):
         """
         want = (not awake) or (self._half_duplex and self._bot_speaking)
         if want != self._paused:
+            # Logged because the only way to tell half-duplex apart from a
+            # slow pipeline is to see WHEN the pause landed relative to the
+            # bot-speaking frame that triggered it.
+            logger.debug(
+                f"Audio input {'paused' if want else 'unpaused'} "
+                f"(awake={awake}, bot_speaking={self._bot_speaking})"
+            )
             self._llm.set_audio_input_paused(want)
             self._paused = want
         self._awake = awake
