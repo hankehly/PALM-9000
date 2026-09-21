@@ -31,3 +31,6 @@ models/*
 
 # Archives
 *.zip
+
+# Claude Code worktrees
+.claude/worktrees
