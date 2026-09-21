@@ -331,6 +331,18 @@ class TestSystemInstruction:
         microphone is paused for all of it."""
         assert "簡潔" in main_module.SYSTEM_INSTRUCTION
 
+    def test_asks_for_plain_form_not_keigo(self):
+        """Left to itself Gemini answers in business keigo ("感じております"),
+        which is wrong for something that sits in a room watching you."""
+        assert "常体" in main_module.SYSTEM_INSTRUCTION
+        assert "敬語は一切使わないでください" in main_module.SYSTEM_INSTRUCTION
+
+    def test_asks_for_simple_language(self):
+        """Named rather than paraphrased: やさしい日本語 is an established
+        register, so the model has a real target rather than a vague
+        instruction to simplify."""
+        assert "やさしい日本語" in main_module.SYSTEM_INSTRUCTION
+
 
 class TestSystemInstructionOverride:
     """SYSTEM_INSTRUCTION_FILE, for trying wording without a redeploy."""
