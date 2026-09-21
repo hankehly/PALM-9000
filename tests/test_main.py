@@ -30,6 +30,7 @@ def _settings(**overrides):
         "wake_word_threshold": 0.5,
         "wake_silence_timeout_secs": 30.0,
         "wake_word_hop_samples": 1280,
+        "wake_word_half_duplex": True,
     }
     base.update(overrides)
     return Settings(_env_file=None, **base)
@@ -630,6 +631,31 @@ class TestWakeWordWiring:
         assert captured["threshold"] == 0.71
         assert captured["silence_timeout_secs"] == 17.5
         assert captured["llm"] == "LLM"
+        assert captured["half_duplex"] is True
+
+    def test_half_duplex_setting_reaches_the_gate(self, monkeypatch):
+        """A non-default value, so the gate's own default cannot pass this."""
+        monkeypatch.setattr(
+            main_module,
+            "get_settings",
+            lambda: _settings(wake_word_enabled=True, wake_word_half_duplex=False),
+        )
+        captured = {}
+        monkeypatch.setattr(
+            main_module, "WakeWordGate", lambda **kw: captured.update(kw) or "GATE"
+        )
+
+        class FakeDetector:
+            def __init__(self, path, hop_samples=None):
+                pass
+
+            def load(self):
+                pass
+
+        monkeypatch.setattr(main_module, "LiveKitWakeWordDetector", FakeDetector)
+        main_module.build_wake_gate(llm="LLM")
+
+        assert captured["half_duplex"] is False
 
     def test_hop_samples_reaches_the_detector(self, monkeypatch):
         """A non-default value, so hardcoding 1280 in build_wake_gate

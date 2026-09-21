@@ -273,7 +273,13 @@ class TestWakeWordGate:
         the silence timeout when the user/bot is actively speaking.
         """
         detector, llm = FakeDetector([0.9]), FakeLLM()
-        gate = make_gate(detector, llm, clock)
+        # half_duplex=False keeps paused_calls an exact detector of sleep.
+        # With half-duplex on, BotStartedSpeakingFrame pauses deliberately,
+        # and a sleep that happened while the bot spoke would call no setter
+        # at all - so the assertion below would pass vacuously. The
+        # half-duplex behaviour these frames now also drive is pinned
+        # separately in TestHalfDuplex.
+        gate = make_gate(detector, llm, clock, half_duplex=False)
         await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
 
         clock.advance(20.0)
@@ -294,7 +300,12 @@ class TestWakeWordGate:
         cannot pass by simply breaking the timeout.
         """
         detector, llm = FakeDetector([0.9]), FakeLLM()
-        gate = make_gate(detector, llm, clock)
+        # half_duplex=False for the same reason as the test above: this one
+        # is about the deadline, and under half-duplex a mid-reply sleep
+        # calls no setter (the service is already paused), which would make
+        # the first assertion vacuous. TestHalfDuplex has the twin of this
+        # test for the default configuration.
+        gate = make_gate(detector, llm, clock, half_duplex=False)
         await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)  # wake
 
         await gate.process_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
@@ -356,3 +367,181 @@ class TestWakeWordGate:
         assert llm.paused_calls == []
         assert len(gate.pushed) == 1
         assert gate._deadline == 0.0
+
+
+class TestHalfDuplex:
+    """The microphone is closed for as long as the bot is speaking.
+
+    Mic and speaker run on independent clocks here (I2S off the SoC, USB
+    out), so PulseAudio's echo canceller drifts ~1.8s out of alignment and
+    residual echo reaches Gemini, whose server-side VAD reads it as a
+    barge-in and cuts the reply off mid-sentence. Sending no microphone
+    audio at all while the bot speaks removes that failure instead of
+    making it less likely; the cost is that barge-in no longer works.
+
+    _awake therefore no longer implies the pause state: pause is a function
+    of _awake AND _bot_speaking.
+    """
+
+    async def test_starts_paused_like_the_service(self, clock):
+        """The service is built with start_audio_paused=True."""
+        gate = make_gate(FakeDetector(), FakeLLM(), clock)
+
+        assert gate._paused is True
+
+    async def test_bot_start_pauses_while_awake(self, clock):
+        detector, llm = FakeDetector([0.9]), FakeLLM()
+        gate = make_gate(detector, llm, clock)
+        await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+
+        await gate.process_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+
+        assert llm.paused_calls == [False, True]
+        assert gate._awake is True, "pausing for the reply is not falling asleep"
+
+    async def test_bot_stop_unpauses_while_awake(self, clock):
+        detector, llm = FakeDetector([0.9]), FakeLLM()
+        gate = make_gate(detector, llm, clock)
+        await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+
+        await gate.process_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+        await gate.process_frame(BotStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
+
+        assert llm.paused_calls == [False, True, False]
+        assert gate._awake is True
+
+    async def test_a_repeated_bot_frame_does_not_call_the_setter_again(self, clock):
+        """Reconciling means the setter is only called on a real change."""
+        detector, llm = FakeDetector([0.9]), FakeLLM()
+        gate = make_gate(detector, llm, clock)
+        await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+
+        for _ in range(3):
+            await gate.process_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+
+        assert llm.paused_calls == [False, True]
+
+    async def test_bot_stop_while_asleep_does_not_unpause(self, clock):
+        """The gate can re-arm mid-reply; the stop frame must not open it."""
+        detector, llm = FakeDetector([0.0]), FakeLLM()
+        gate = make_gate(detector, llm, clock)
+
+        await gate.process_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+        await gate.process_frame(BotStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
+
+        assert llm.paused_calls == [], "asleep is paused, whatever the bot does"
+        assert gate._awake is False
+        assert gate._paused is True
+
+    async def test_waking_mid_reply_leaves_the_audio_paused(self, clock):
+        """Awake while the bot talks still means nothing reaches Gemini."""
+        detector, llm = FakeDetector([0.9]), FakeLLM()
+        gate = make_gate(detector, llm, clock)
+
+        await gate.process_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+        await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+
+        assert llm.paused_calls == [], "no mic audio may reach Gemini mid-reply"
+        assert gate._awake is True, "the wake word was still heard"
+        assert gate._deadline == 30.0, "and the silence timer still started"
+
+        await gate.process_frame(BotStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
+
+        assert llm.paused_calls == [False], "the reply ending opens the mic"
+
+    async def test_sleeping_while_the_bot_speaks_stays_paused(self, clock):
+        """A lost BotSpeakingFrame can still let the deadline expire.
+
+        Sleeping mid-reply must leave the service paused - it already is -
+        and the BotStoppedSpeakingFrame that arrives afterwards must not
+        undo it.
+        """
+        detector, llm = FakeDetector([0.9]), FakeLLM()
+        gate = make_gate(detector, llm, clock)
+        await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+        await gate.process_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+
+        clock.advance(31.0)
+        await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+
+        assert gate._awake is False, "the silence timeout still fires"
+        assert gate._paused is True
+        assert llm.paused_calls == [False, True], "already paused; no second call"
+
+        await gate.process_frame(BotStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
+
+        assert llm.paused_calls == [False, True], "must not unpause while asleep"
+
+    async def test_a_long_reply_pauses_once_and_unpauses_once(self, clock):
+        """The half-duplex twin of test_a_long_bot_reply_does_not_trip_the_timeout."""
+        detector, llm = FakeDetector([0.9]), FakeLLM()
+        gate = make_gate(detector, llm, clock)
+        await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)  # wake
+
+        await gate.process_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+        for _ in range(4):  # BotSpeakingFrame every 10s out to 40s
+            clock.advance(10.0)
+            await gate.process_frame(BotSpeakingFrame(), FrameDirection.UPSTREAM)
+            await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+        clock.advance(5.0)  # 45s total
+        await gate.process_frame(BotStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
+
+        assert llm.paused_calls == [False, True, False], (
+            "one pause for the whole reply, one unpause when it ends"
+        )
+        assert gate._awake is True
+
+        clock.advance(31.0)
+        await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+
+        assert llm.paused_calls == [False, True, False, True], (
+            "and it still sleeps once truly idle"
+        )
+
+    async def test_disabled_reproduces_the_old_behaviour(self, clock):
+        """half_duplex=False: bot frames only ever touch the deadline.
+
+        Hardware with echo cancellation that works keeps barge-in this way.
+        """
+        detector, llm = FakeDetector([0.9]), FakeLLM()
+        gate = make_gate(detector, llm, clock, half_duplex=False)
+        await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+
+        await gate.process_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+        await gate.process_frame(BotStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
+
+        assert llm.paused_calls == [False], "the mic stays open through the reply"
+
+        clock.advance(31.0)
+        await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+
+        assert llm.paused_calls == [False, True], "the silence timeout is unchanged"
+
+    async def test_a_failing_mid_reply_pause_is_retried(self, clock):
+        """The mirrored state must not record a pause the service refused."""
+
+        class ExplodingLLM(FakeLLM):
+            def __init__(self):
+                super().__init__()
+                self.explode = False
+
+            def set_audio_input_paused(self, paused):
+                super().set_audio_input_paused(paused)
+                if self.explode:
+                    raise RuntimeError("websocket is gone")
+
+        llm = ExplodingLLM()
+        gate = make_gate(FakeDetector([0.9]), llm, clock)
+        await gate.process_frame(audio_frame(), FrameDirection.DOWNSTREAM)
+
+        llm.explode = True
+        with pytest.raises(RuntimeError):
+            await gate.process_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+
+        assert gate._paused is False, "the service never took the pause"
+        assert gate._awake is True
+
+        llm.explode = False
+        await gate.process_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+
+        assert llm.paused_calls == [False, True, True], "the next frame retries it"

@@ -106,6 +106,7 @@ def build_wake_gate(llm: GeminiLiveLLMService) -> WakeWordGate | None:
         llm=llm,
         threshold=settings.wake_word_threshold,
         silence_timeout_secs=settings.wake_silence_timeout_secs,
+        half_duplex=settings.wake_word_half_duplex,
     )
 
 

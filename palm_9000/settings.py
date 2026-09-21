@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     wake_word_threshold: float = 0.5
     wake_silence_timeout_secs: float = 30.0
     wake_word_hop_samples: int = 1280
+    # Pause the microphone while the bot speaks. On by default: the mic and
+    # the speaker run on independent clocks here, the echo canceller drifts
+    # ~1.8s out of alignment, and the residual echo makes Gemini's VAD cut
+    # the reply off. Costs barge-in; set false on hardware whose AEC works.
+    wake_word_half_duplex: bool = True
 
     # Only needed by the cascaded GoogleSTTService / GoogleTTSService path,
     # not by the Gemini Live pipeline in main.py.
