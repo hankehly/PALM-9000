@@ -11,6 +11,7 @@ dependencies = [
     "pydantic>=2.11.7",
     "pydantic-settings>=2.10.1",
     "pipecat-ai[google,local,silero]>=1.11.0,<2",
+    "livekit-wakeword>=0.2.1",
     # Hardware access for the Pi. Both are Linux-only wheels, so they are
     # marked accordingly and simply absent on a development Mac.
     # spidev drives the MAX7219 (palm_9000/gpio.py); RPi.GPIO drives the

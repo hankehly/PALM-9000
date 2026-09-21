@@ -19,6 +19,23 @@ import pytest
 import main as main_module
 
 
+def _settings(**overrides):
+    """A real Settings object with wake-word fields overridden."""
+    from palm_9000.settings import Settings
+
+    base = {
+        "google_api_key": "k",
+        "wake_word_enabled": False,
+        "wake_word_model_path": "models/wakeword/hey_livekit.onnx",
+        "wake_word_threshold": 0.5,
+        "wake_silence_timeout_secs": 10.0,
+        "wake_word_hop_samples": 1280,
+        "wake_word_half_duplex": True,
+    }
+    base.update(overrides)
+    return Settings(_env_file=None, **base)
+
+
 class FakeEventEmitter:
     """Captures handlers registered via the @x.event_handler("name") decorator."""
 
@@ -205,6 +222,32 @@ class TestWorkerRegistrationRegression:
         """A non-awaited call would leave a dangling coroutine and connect to nothing."""
         source = inspect.getsource(main_module.run_pipeline)
         assert "await runner.add_workers(" in source
+
+
+class TestSingleServiceRegression:
+    """The gate must pause the service that is actually in the pipeline."""
+
+    async def test_only_one_gemini_service_is_built(self, wired, monkeypatch):
+        """Two services would leave the pipeline's copy paused forever.
+
+        build_wake_gate receives the same GeminiLiveLLMService that goes
+        into the pipeline. If run_pipeline built a second one, the gate
+        would unpause an orphan while the pipeline's service stayed
+        paused with start_audio_paused=True -- no audio would ever reach
+        Google, the log would look healthy, and the plant would never
+        answer. Same silent-failure family as the two regressions above.
+        """
+        built = []
+
+        def counting_llm(**kwargs):
+            built.append(kwargs)
+            return "LLM"
+
+        monkeypatch.setattr(main_module, "GeminiLiveLLMService", counting_llm)
+
+        await main_module.main()
+
+        assert len(built) == 1, f"run_pipeline built {len(built)} services, expected 1"
 
 
 class TestPipelineOrder:
@@ -549,3 +592,293 @@ class TestRunnerFailureKeepsTheTraceback:
         assert not calls["error"], (
             "logger.error drops the traceback; use logger.exception"
         )
+
+
+class TestWakeWordWiring:
+    def test_no_gate_when_disabled(self, monkeypatch):
+        monkeypatch.setattr(
+            main_module, "get_settings", lambda: _settings(wake_word_enabled=False)
+        )
+        assert main_module.build_wake_gate(llm=MagicMock()) is None
+
+    def test_gate_built_when_enabled(self, monkeypatch):
+        monkeypatch.setattr(
+            main_module,
+            "get_settings",
+            lambda: _settings(
+                wake_word_enabled=True,
+                wake_word_threshold=0.71,
+                wake_silence_timeout_secs=17.5,
+            ),
+        )
+        captured = {}
+        monkeypatch.setattr(
+            main_module, "WakeWordGate", lambda **kw: captured.update(kw) or "GATE"
+        )
+
+        class FakeDetector:
+            def __init__(self, path, hop_samples=None):
+                self.path = path
+                self.hop_samples = hop_samples
+                self.loaded = False
+
+            def load(self):
+                self.loaded = True
+
+        monkeypatch.setattr(main_module, "LiveKitWakeWordDetector", FakeDetector)
+
+        assert main_module.build_wake_gate(llm="LLM") == "GATE"
+        assert captured["threshold"] == 0.71
+        assert captured["silence_timeout_secs"] == 17.5
+        assert captured["llm"] == "LLM"
+        assert captured["half_duplex"] is True
+
+    def test_half_duplex_setting_reaches_the_gate(self, monkeypatch):
+        """A non-default value, so the gate's own default cannot pass this."""
+        monkeypatch.setattr(
+            main_module,
+            "get_settings",
+            lambda: _settings(wake_word_enabled=True, wake_word_half_duplex=False),
+        )
+        captured = {}
+        monkeypatch.setattr(
+            main_module, "WakeWordGate", lambda **kw: captured.update(kw) or "GATE"
+        )
+
+        class FakeDetector:
+            def __init__(self, path, hop_samples=None):
+                pass
+
+            def load(self):
+                pass
+
+        monkeypatch.setattr(main_module, "LiveKitWakeWordDetector", FakeDetector)
+        main_module.build_wake_gate(llm="LLM")
+
+        assert captured["half_duplex"] is False
+
+    def test_hop_samples_reaches_the_detector(self, monkeypatch):
+        """A non-default value, so hardcoding 1280 in build_wake_gate
+        cannot pass this test."""
+        monkeypatch.setattr(
+            main_module,
+            "get_settings",
+            lambda: _settings(wake_word_enabled=True, wake_word_hop_samples=999),
+        )
+        monkeypatch.setattr(main_module, "WakeWordGate", lambda **kw: "GATE")
+
+        captured = {}
+
+        class FakeDetector:
+            def __init__(self, path, hop_samples=None):
+                captured["path"] = path
+                captured["hop_samples"] = hop_samples
+
+            def load(self):
+                pass
+
+        monkeypatch.setattr(main_module, "LiveKitWakeWordDetector", FakeDetector)
+        main_module.build_wake_gate(llm="LLM")
+
+        assert captured["hop_samples"] == 999
+
+    def test_model_is_loaded_at_build_time(self, monkeypatch):
+        """A missing model must fail at startup, not on the first frame."""
+        monkeypatch.setattr(
+            main_module, "get_settings", lambda: _settings(wake_word_enabled=True)
+        )
+        monkeypatch.setattr(main_module, "WakeWordGate", lambda **kw: "GATE")
+
+        loaded = []
+
+        class FakeDetector:
+            def __init__(self, path, hop_samples=None):
+                self.path = path
+
+            def load(self):
+                loaded.append(self.path)
+
+        monkeypatch.setattr(main_module, "LiveKitWakeWordDetector", FakeDetector)
+        main_module.build_wake_gate(llm="LLM")
+
+        assert loaded == ["models/wakeword/hey_livekit.onnx"]
+
+    def test_missing_model_raises_at_build_time(self, monkeypatch):
+        monkeypatch.setattr(
+            main_module,
+            "get_settings",
+            lambda: _settings(wake_word_enabled=True, wake_word_model_path="nope.onnx"),
+        )
+        with pytest.raises(FileNotFoundError):
+            main_module.build_wake_gate(llm="LLM")
+
+    def test_pipeline_places_the_gate_before_the_aggregator(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(
+            main_module,
+            "Pipeline",
+            lambda processors: captured.setdefault("p", processors),
+        )
+        transport = MagicMock()
+        transport.input.return_value = "IN"
+        transport.output.return_value = "OUT"
+        aggregators = MagicMock()
+        aggregators.user.return_value = "AGG_USER"
+        aggregators.assistant.return_value = "AGG_ASSISTANT"
+
+        main_module.build_pipeline(
+            transport=transport,
+            llm="LLM",
+            context_aggregator=aggregators,
+            recording_control="CTL",
+            audio_buffer="BUF",
+            wake_gate="GATE",
+        )
+
+        order = captured["p"]
+        assert order.index("IN") < order.index("GATE") < order.index("AGG_USER")
+
+    def test_pipeline_omits_the_gate_when_none(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(
+            main_module,
+            "Pipeline",
+            lambda processors: captured.setdefault("p", processors),
+        )
+        transport = MagicMock()
+        transport.input.return_value = "IN"
+        transport.output.return_value = "OUT"
+        aggregators = MagicMock()
+        aggregators.user.return_value = "AGG_USER"
+        aggregators.assistant.return_value = "AGG_ASSISTANT"
+
+        main_module.build_pipeline(
+            transport=transport,
+            llm="LLM",
+            context_aggregator=aggregators,
+            recording_control="CTL",
+            audio_buffer="BUF",
+            wake_gate=None,
+        )
+
+        assert None not in captured["p"]
+        assert captured["p"][0] == "IN"
+        assert captured["p"][1] == "AGG_USER"
+
+    def test_service_starts_paused_only_when_gating(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(
+            main_module,
+            "GeminiLiveLLMService",
+            lambda **kw: captured.update(kw) or "LLM",
+        )
+
+        monkeypatch.setattr(
+            main_module, "get_settings", lambda: _settings(wake_word_enabled=True)
+        )
+        main_module.build_llm()
+        assert captured["start_audio_paused"] is True
+
+        captured.clear()
+        monkeypatch.setattr(
+            main_module, "get_settings", lambda: _settings(wake_word_enabled=False)
+        )
+        main_module.build_llm()
+        assert captured["start_audio_paused"] is False
+
+    def test_aggregator_gets_a_vad_analyzer(self, monkeypatch):
+        """Without it the silence timer has no activity signal."""
+        monkeypatch.setattr(
+            main_module, "get_settings", lambda: _settings(wake_word_enabled=True)
+        )
+        captured = {}
+        monkeypatch.setattr(
+            main_module,
+            "LLMContextAggregatorPair",
+            lambda context, **kw: captured.update(kw) or MagicMock(),
+        )
+        main_module.build_context_aggregator()
+        assert captured["user_params"].vad_analyzer is not None
+
+    def test_local_vad_does_not_interrupt_the_bot(self, monkeypatch):
+        """Regression: on device the bot cut itself off mid-sentence.
+
+        A vad_analyzer makes pipecat's VADUserTurnStartStrategy live, and it
+        defaults to broadcasting an interruption on every detected turn
+        start, which GeminiLiveLLMService turns into a TTSStoppedFrame. Echo
+        leakage into the mic is therefore enough to stop the bot talking:
+        the device log showed `broadcasting interruption` 0.7s after the
+        first transcription and three more times during the reply.
+
+        Gemini decides turns server-side, so nothing here needs a local
+        barge-in.
+        """
+        monkeypatch.setattr(
+            main_module, "get_settings", lambda: _settings(wake_word_enabled=True)
+        )
+        captured = {}
+        monkeypatch.setattr(
+            main_module,
+            "LLMContextAggregatorPair",
+            lambda context, **kw: captured.update(kw) or MagicMock(),
+        )
+
+        main_module.build_context_aggregator()
+
+        starts = captured["user_params"].user_turn_strategies.start
+        assert starts, "no start strategy: the gate loses its activity signal"
+        for strategy in starts:
+            assert strategy._enable_interruptions is False, strategy
+
+    def test_no_second_onnx_model_for_turn_detection(self, monkeypatch):
+        """The default stop strategy loads smart-turn-v3.2-cpu.onnx.
+
+        `TurnAnalyzerUserTurnStopStrategy(LocalSmartTurnAnalyzerV3)` is the
+        default, and it is a whole second ONNX model doing a job Gemini
+        already does server-side -- memory and CPU a 416MB Pi cannot spare
+        on top of the wake-word chain.
+
+        Note an empty list would NOT express this: UserTurnStrategies
+        treats falsy as "unset" and restores the defaults, so this asserts a
+        real strategy is named rather than that the list is empty.
+        """
+        from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import (
+            TurnAnalyzerUserTurnStopStrategy,
+        )
+
+        monkeypatch.setattr(
+            main_module, "get_settings", lambda: _settings(wake_word_enabled=True)
+        )
+        captured = {}
+        monkeypatch.setattr(
+            main_module,
+            "LLMContextAggregatorPair",
+            lambda context, **kw: captured.update(kw) or MagicMock(),
+        )
+
+        main_module.build_context_aggregator()
+
+        stops = captured["user_params"].user_turn_strategies.stop
+        assert stops, "empty stop list would restore the ONNX default"
+        for strategy in stops:
+            assert not isinstance(strategy, TurnAnalyzerUserTurnStopStrategy), strategy
+
+    def test_aggregator_has_no_vad_analyzer_when_gating_is_off(self, monkeypatch):
+        """The disabled path must stay identical to the pre-feature app.
+
+        A vad_analyzer builds pipecat's VADController, which makes the
+        default turn-start strategy broadcast interruptions. With no gate
+        there is nothing that needs the signal, and the interruptions would
+        let poor echo cancellation make the bot cut itself off.
+        """
+        monkeypatch.setattr(
+            main_module, "get_settings", lambda: _settings(wake_word_enabled=False)
+        )
+        captured = {}
+        monkeypatch.setattr(
+            main_module,
+            "LLMContextAggregatorPair",
+            lambda context, **kw: captured.update(kw) or MagicMock(),
+        )
+        main_module.build_context_aggregator()
+        assert captured == {}, "the disabled path must pass no user_params at all"

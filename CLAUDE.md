@@ -20,6 +20,7 @@ uv run --no-sync pytest --cov --cov-report=term-missing
 uv run --no-sync ruff check --fix main.py palm_9000/ tests/
 uv run --no-sync ruff format main.py palm_9000/ tests/
 PULSE_LATENCY_MSEC=60 uv run --no-dev main.py   # run for real (on the Pi)
+WAKE_WORD_ENABLED=true PULSE_LATENCY_MSEC=60 uv run --no-dev main.py   # gated
 ```
 
 `uv sync` (no flags) pulls the full `dev` group: torch, whisper, langchain,
@@ -33,10 +34,17 @@ work, and `--no-dev` for running on the Pi.
 ## Pipeline order matters
 
 ```
-transport.input() -> context_aggregator.user() -> llm -> transport.output()
-  -> AudioRecordingControlProcessor -> AudioBufferProcessor
-  -> context_aggregator.assistant()
+transport.input() -> [WakeWordGate] -> context_aggregator.user() -> llm
+  -> transport.output() -> AudioRecordingControlProcessor
+  -> AudioBufferProcessor -> context_aggregator.assistant()
 ```
+
+`WakeWordGate` is present only when wake-word gating is enabled.
+`build_pipeline` takes `wake_gate=None` by default and, when it is
+`None`, leaves the step out entirely rather than inserting a
+pass-through, so the disabled pipeline is the sequence above minus the
+gate, unchanged from before the feature existed. Its position — upstream
+of everything else — is load-bearing; see the gotcha below.
 
 The recording-control and buffer processors sit *after* `transport.output()`
 because they react to bot-speaking frames, which originate downstream. The
@@ -76,6 +84,148 @@ prefix, so pydantic-settings reads it fine. The Pi has its own `.env` that is
 separate from the development machine's — updating one does not update the
 other, and `INPUT_DEVICE` legitimately differs between them, so do not copy
 the file wholesale.
+
+**Wake-word gating is off by default.** With `wake_word_enabled=False`
+the app streams microphone audio to Gemini continuously while running —
+a privacy posture and roughly $0.30/hour. Rates change; check Google's
+current Gemini Live pricing before treating that figure as exact. Set
+`WAKE_WORD_ENABLED=true` before leaving PALM-9000 running unattended.
+
+**The gate fails closed.** A detector error or a missing model keeps the
+microphone shut rather than falling back to ungated streaming.
+`build_wake_gate` loads the model eagerly so a missing file fails at
+startup. Do not add a fallback — it would silently restore continuous
+upload.
+
+**The wake gate's pipeline position is load-bearing.** `WakeWordGate`
+sits between `transport.input()` and `context_aggregator.user()`,
+upstream of every processor that emits the six frames its silence timer
+resets on: `UserStartedSpeakingFrame`, `UserStoppedSpeakingFrame`,
+`UserSpeakingFrame`, `BotStartedSpeakingFrame`, `BotStoppedSpeakingFrame`,
+`BotSpeakingFrame`. All six come from processors downstream of the gate —
+the user aggregator and the output transport — and each is emitted in
+*both* directions, by three different routes:
+
+- the user start/stop frames via `FrameProcessor.broadcast_frame`
+  (`frame_processor.py:1053-1054`) from
+  `llm_response_universal.py:1324,1410`;
+- `UserSpeakingFrame` via `_queued_broadcast_frame`
+  (`llm_response_universal.py:1268-1281`) from `_on_vad_speech_activity`
+  at `:1310` — a different method, which also pushes UPSTREAM;
+- the three bot frames by hand in the output transport
+  (`base_output.py:716-726,787-798`, and `:805` for `BotSpeakingFrame`).
+
+The gate, upstream of all of them, only ever sees the upstream copy. Move
+it downstream of the aggregator and it stops seeing all six: the deadline
+never resets, and the plant goes deaf one silence timeout into a conversation,
+with no error.
+
+**The *continuing* speech frames are load-bearing, not padding.**
+`_ACTIVITY_FRAMES` must include `BotSpeakingFrame` and
+`UserSpeakingFrame`, not only the start/stop pairs. Nothing arrives
+between a start and a stop, so with start/stop alone a 45-second bot
+reply trips the silence timeout *while the bot is audibly
+talking* — the log reads "No speech for 10.0s" over the sound of it
+speaking — and the `BotStoppedSpeakingFrame` that follows is ignored,
+because the deadline only refreshes while awake. The user's follow-up
+is then discarded and they have to say the wake word again. Both
+continuing frames broadcast about every 0.2s (`base_output.py:805` for
+the bot; `VADController.on_speech_activity` via the user aggregator).
+
+**The wake-word model is stateless; the detector holds the buffer.**
+`WakeWordModel.predict()` mels exactly the chunk you hand it and needs
+76 + 15×8 = 196 mel frames — about 2 seconds — in a *single* call
+(`livekit/wakeword/inference/model.py:96-145`). It accumulates nothing
+between calls. `LocalAudioTransport` pushes 20 ms frames (320 samples
+at 16 kHz, `pipecat/transports/local/audio.py:76`), so handing a frame
+straight to `predict()` raises `InvalidArgument: Invalid input shape:
+{320}` about fifty times a second and never scores anything. Shorter-
+but-valid chunks are worse: below ~2 s `predict()` returns **exactly
+0.0 for every possible input**, including a perfect wake word — which
+is why a test that only asserts "silence scores below the threshold"
+proves nothing at all. `LiveKitWakeWordDetector` therefore keeps its
+own 2-second rolling buffer and scores it on an 80 ms hop. `reset()`
+clears that buffer and keeps the model; dropping the model forces a
+full ONNX session rebuild on the next frame, which on a Pi is seconds
+of stall after every wake.
+
+Because `reset()` empties the buffer, there is a ~2 s window after the
+gate re-arms during which no score is possible. That is a *delay*, not a
+miss: a wake word spoken in that window is still in the buffer when it
+first fills, so it scores up to ~2 s late rather than being lost. Only an
+utterance straddling the re-arm instant loses its beginning.
+
+**With gating on, local VAD can interrupt the bot.** The turn-start
+strategy defaults to `enable_interruptions=True`
+(`base_user_turn_start_strategy.py:56`), so echo leakage or a second
+person talking will cut a reply off mid-sentence without any wake word.
+**This is confirmed on hardware, not a theoretical risk.** On the first
+real sentence the log shows `broadcasting interruption` 0.7 s after the
+user's speech was transcribed, and three more times during the reply —
+the bot audibly cut itself off. Do not ship gating on without addressing
+it.
+
+An earlier version of this note called it "accepted, not fixed", on the
+grounds that there is no knob and that suppressing it means pinning
+pipecat's whole strategy list. Both halves were wrong:
+
+- `enable_interruptions` and `enable_user_speaking_frames` are
+  **independent** constructor parameters
+  (`base_user_turn_start_strategy.py:53-58`), so the interruption can be
+  disabled while the gate keeps the speaking frames its silence timer
+  needs.
+- In realtime mode pipecat already mutates the strategy list down to a
+  single `VADUserTurnStartStrategy`, and
+  `_apply_realtime_mode_strategy_mutations`
+  (`llm_response_universal.py:960-985`) only ever **drops** strategies,
+  never adds. Passing one explicit start strategy is therefore stable,
+  not fragile.
+
+**While you are there: `LocalSmartTurnAnalyzerV3` is a second ONNX model
+you are probably paying for by accident.** `UserTurnStrategies` defaults
+its *stop* strategy to `TurnAnalyzerUserTurnStopStrategy(LocalSmartTurnAnalyzerV3)`,
+which loads `smart-turn-v3.2-cpu.onnx` and runs end-of-turn inference.
+Gemini does turn detection server-side, so none of it is needed here; it
+arrives as a default alongside `vad_analyzer`.
+`SpeechTimeoutUserTurnStopStrategy` is a non-ONNX alternative. Note
+`UserTurnStrategies.__post_init__` treats an empty list as "unset" and
+restores the defaults, so pass a real strategy rather than `[]`.
+
+**With gating on, room noise can hold the 10-minute idle timeout open.**
+Local VAD emits `UserStartedSpeakingFrame` and `UserSpeakingFrame`, both
+in `PipelineWorker`'s default idle set (`worker.py:301-307`), so a
+television or a nearby conversation keeps resetting `IDLE_TIMEOUT_SECS`.
+It is *not* disabled, though: measured on the Pi in a quiet room it fired
+at exactly 600 s and shut the app down as designed. Treat it as
+unreliable-when-noisy rather than absent.
+
+That same shutdown exposed something worth knowing: the `CancelFrame`
+took **20 seconds** to traverse the pipeline, and pipecat said so —
+`timeout waiting for CancelFrame#0 to reach the end of the pipeline
+(being blocked somewhere?)`. That is the wake-word inference blocking the
+event loop, showing up as measured unresponsiveness rather than theory.
+
+**`vad_analyzer` is attached only when gating is on.** This is not a
+tidiness choice. A `vad_analyzer` is what constructs pipecat's
+`VADController` at all (`if self._params.vad_analyzer:`,
+`llm_response_universal.py:756`) and brings the default
+`VADUserTurnStartStrategy` to life; that strategy broadcasts an
+interruption on every detected turn start
+(`llm_response_universal.py:1327-1329`), which `GeminiLiveLLMService`
+turns into a `TTSStoppedFrame` that cuts the bot off mid-sentence
+(`gemini_live/llm.py:1036-1037`, `:960-966`). Attaching Silero
+unconditionally woke all of that on every run, including gating off,
+where nothing needs it: imperfect echo cancellation — the risk the
+Hardware section already names as "the bot hears itself and talks to
+itself" — lets a sliver of the bot's own TTS reach the mic, local VAD
+reads it as speech, and the bot interrupts itself, a failure that did
+not exist before this branch. `GeminiLiveLLMService` also logs
+pipecat's "not emitting turn frames" warning once at startup either
+way — `service_metadata_frame()` never looks at the aggregator, so
+seeing it does not mean local VAD is missing. Its own suggested fix is
+"set a vad_analyzer in LLMUserAggregatorParams"; that is not a reason
+to attach one unconditionally. Doing so to quiet the warning is the
+same mistake that caused this bug.
 
 ## Tests
 

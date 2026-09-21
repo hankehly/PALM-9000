@@ -194,3 +194,29 @@ class TestSettingsAreLoadedLazily:
         from palm_9000.settings import get_settings
 
         assert get_settings() is get_settings()
+
+
+class TestWakeWordAssets:
+    def test_livekit_wakeword_is_a_main_dependency(self):
+        main_deps = pyproject()["project"]["dependencies"]
+        assert any("livekit-wakeword" in dep for dep in main_deps), (
+            "livekit-wakeword must be a production dependency; the gate runs "
+            "on the Pi under --no-dev."
+        )
+
+    def test_model_file_is_committed_and_readable(self):
+        model = PROJECT_ROOT / "models" / "wakeword" / "hey_livekit.onnx"
+        assert model.exists(), f"{model} is missing"
+        assert model.stat().st_size > 500_000, "model looks truncated"
+
+    def test_model_is_tracked_by_git(self):
+        """A .gitignore rule silently excluding it would break deploys."""
+        result = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "models/wakeword/hey_livekit.onnx"],
+            capture_output=True,
+            text=True,
+            cwd=PROJECT_ROOT,
+        )
+        assert result.returncode == 0, (
+            "model is not tracked by git; check the .gitignore negations"
+        )
