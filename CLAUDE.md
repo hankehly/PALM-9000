@@ -117,15 +117,15 @@ the user aggregator and the output transport — and each is emitted in
 
 The gate, upstream of all of them, only ever sees the upstream copy. Move
 it downstream of the aggregator and it stops seeing all six: the deadline
-never resets, and the plant goes deaf 30 seconds into a conversation,
+never resets, and the plant goes deaf one silence timeout into a conversation,
 with no error.
 
 **The *continuing* speech frames are load-bearing, not padding.**
 `_ACTIVITY_FRAMES` must include `BotSpeakingFrame` and
 `UserSpeakingFrame`, not only the start/stop pairs. Nothing arrives
 between a start and a stop, so with start/stop alone a 45-second bot
-reply trips the 30-second silence timeout *while the bot is audibly
-talking* — the log reads "No speech for 30.0s" over the sound of it
+reply trips the silence timeout *while the bot is audibly
+talking* — the log reads "No speech for 10.0s" over the sound of it
 speaking — and the `BotStoppedSpeakingFrame` that follows is ignored,
 because the deadline only refreshes while awake. The user's follow-up
 is then discarded and they have to say the wake word again. Both

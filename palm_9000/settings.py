@@ -14,7 +14,14 @@ class Settings(BaseSettings):
     wake_word_enabled: bool = False
     wake_word_model_path: str = "models/wakeword/hey_livekit.onnx"
     wake_word_threshold: float = 0.5
-    wake_silence_timeout_secs: float = 30.0
+    # How long to keep listening after an exchange before the wake word is
+    # needed again. Comparable systems use less: Alexa's Follow-Up Mode is
+    # ~5s and Google Assistant's Continued Conversation ~8s. 10s sits just
+    # above them because re-waking costs more here -- reset() empties the
+    # detector's buffer, so it needs a full 2s window plus up to one hop
+    # before it can score again, where theirs re-arm near-instantly.
+    # Every second of this is a second of microphone audio sent to Google.
+    wake_silence_timeout_secs: float = 10.0
     wake_word_hop_samples: int = 1280
     # Pause the microphone while the bot speaks. On by default: the mic and
     # the speaker run on independent clocks here, the echo canceller drifts

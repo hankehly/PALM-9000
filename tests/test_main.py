@@ -28,7 +28,7 @@ def _settings(**overrides):
         "wake_word_enabled": False,
         "wake_word_model_path": "models/wakeword/hey_livekit.onnx",
         "wake_word_threshold": 0.5,
-        "wake_silence_timeout_secs": 30.0,
+        "wake_silence_timeout_secs": 10.0,
         "wake_word_hop_samples": 1280,
         "wake_word_half_duplex": True,
     }

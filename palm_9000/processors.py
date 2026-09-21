@@ -105,7 +105,7 @@ class WakeWordGate(FrameProcessor):
         detector,
         llm,
         threshold: float = 0.5,
-        silence_timeout_secs: float = 30.0,
+        silence_timeout_secs: float = 10.0,
         half_duplex: bool = True,
         now=time.monotonic,
     ) -> None:

@@ -157,10 +157,10 @@ is wrong — 0.5 is a guess, not a measured value.
 
 ## 4. Verify it sleeps
 
-Stay quiet for 30 seconds after the exchange ends. Expect:
+Stay quiet for 10 seconds after the exchange ends. Expect:
 
 ```
-No speech for 30.0s - going back to sleep
+No speech for 10.0s - going back to sleep
 ```
 
 Then confirm the ~2 s re-arm delay is not a problem in practice: say the

@@ -116,7 +116,7 @@ class TestWakeWordSettings:
         settings = Settings(_env_file=None, google_api_key="k")
         assert settings.wake_word_model_path == "models/wakeword/hey_livekit.onnx"
         assert settings.wake_word_threshold == 0.5
-        assert settings.wake_silence_timeout_secs == 30.0
+        assert settings.wake_silence_timeout_secs == 10.0
         assert settings.wake_word_hop_samples == 1280
         # On by default: the echo canceller cannot keep up with the clock
         # drift between the I2S mic and the USB speaker, so the bot would

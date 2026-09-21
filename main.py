@@ -206,7 +206,7 @@ def build_pipeline(
     all originate downstream of it and reach it only as the upstream copy
     of a broadcast, so moving the gate below context_aggregator.user()
     means it stops seeing them: the deadline never resets and the plant
-    goes deaf 30 seconds into a conversation, with no error.
+    goes deaf one silence timeout into a conversation, with no error.
     """
     processors = [transport.input()]
     if wake_gate is not None:
