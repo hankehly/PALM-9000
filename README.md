@@ -134,12 +134,23 @@ pactl list short sinks    # E.g., alsa_output.usb-GeneralPlus_USB_Audio_Device-0
 
 Edit the PulseAudio configuration file (`/etc/pulse/default.pa`) to load the echo cancel module on startup. Specify the correct source_master and sink_master based on the previous step.
 ```sh
-load-module module-echo-cancel source_name=echosource sink_name=echosink source_master=alsa_input.platform-soc_sound.stereo-fallback sink_master=alsa_output.usb-GeneralPlus_USB_Audio_Device-00.analog-stereo use_master_format=1 aec_method=webrtc aec_args="analog_gain_control=0 digital_gain_control=1 extended_filter=1 noise_suppression=1"
+load-module module-echo-cancel source_name=echosource sink_name=echosink source_master=alsa_input.platform-soc_sound.stereo-fallback sink_master=alsa_output.usb-GeneralPlus_USB_Audio_Device-00.analog-stereo use_master_format=1 aec_method=webrtc aec_args="analog_gain_control=0 digital_gain_control=1 extended_filter=1 noise_suppression=1 drift_compensation=1"
 set-default-source echosource
 set-default-sink echosink
 ```
 
-Restart PulseAudio to apply the changes.
+`drift_compensation=1` matters when the microphone and speaker sit on
+different hardware clocks, which they do here — I2S off the SoC for the mic,
+USB for the speaker. Without it the two streams slowly slip out of
+alignment and the canceller stops removing the echo, which surfaces as the
+bot interrupting itself mid-sentence. See
+[docs/raspberry-pi-config.md](docs/raspberry-pi-config.md).
+
+Restart PulseAudio to apply the changes. Note that a runtime
+`pactl unload-module` is *not* a valid way to test an edit: the daemon can
+exit and respawn from `default.pa`, silently discarding it. Use
+`pulseaudio --kill && pulseaudio --daemonize=yes`, then confirm with
+`pactl list modules | grep -o 'aec_args="[^"]*"'`.
 ```sh
 systemctl --user restart pulseaudio
 ```
