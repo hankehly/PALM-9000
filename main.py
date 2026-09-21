@@ -124,7 +124,32 @@ def build_context_aggregator() -> LLMContextAggregatorPair:
     unconditionally would let imperfect echo cancellation make the bot
     interrupt itself -- a failure that does not exist with gating off.
 
-    The import is deferred for the same reason: SileroVADAnalyzer pulls in
+    Both turn strategies are named explicitly rather than left to pipecat's
+    defaults, for two measured reasons:
+
+    * `enable_interruptions=False`. On device, the default True broadcast an
+      interruption 0.7s after the first transcription and three more times
+      during the reply, and the bot audibly cut itself off: echo leakage
+      reaches the mic, local VAD calls it a turn start. Interruptions are
+      independent of `enable_user_speaking_frames`, which stays on, so the
+      gate still gets the activity frames its silence timer runs on.
+      Gemini does turn detection server-side, so nothing here needs a
+      locally-driven barge-in.
+    * `SpeechTimeoutUserTurnStopStrategy`. The default stop strategy is
+      `TurnAnalyzerUserTurnStopStrategy(LocalSmartTurnAnalyzerV3)`, which
+      loads a SECOND ONNX model (smart-turn-v3.2-cpu.onnx) and runs
+      end-of-turn inference. On a 416 MB Pi already paying for the
+      wake-word chain, that is memory and CPU spent on a decision the
+      server is making anyway. Note an empty list will NOT disable it:
+      `UserTurnStrategies.__post_init__` treats falsy as "unset" and
+      restores the defaults, so a real strategy has to be named.
+
+    Passing explicit strategies is safe here even though pipecat mutates
+    them in realtime mode: `_apply_realtime_mode_strategy_mutations` only
+    ever drops strategies, never adds, and what it drops
+    (TranscriptionUserTurnStartStrategy) is not in this list.
+
+    The imports are deferred because SileroVADAnalyzer pulls in
     onnxruntime, which costs ~13 MB of RSS at import time on a Pi with
     416 MB. With gating off nothing here needs it, and the disabled path is
     meant to be unchanged in footprint as well as behaviour.
@@ -133,10 +158,23 @@ def build_context_aggregator() -> LLMContextAggregatorPair:
         return LLMContextAggregatorPair(LLMContext())
 
     from pipecat.audio.vad.silero import SileroVADAnalyzer
+    from pipecat.turns.user_start.vad_user_turn_start_strategy import (
+        VADUserTurnStartStrategy,
+    )
+    from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
+        SpeechTimeoutUserTurnStopStrategy,
+    )
+    from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
     return LLMContextAggregatorPair(
         LLMContext(),
-        user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
+        user_params=LLMUserAggregatorParams(
+            vad_analyzer=SileroVADAnalyzer(),
+            user_turn_strategies=UserTurnStrategies(
+                start=[VADUserTurnStartStrategy(enable_interruptions=False)],
+                stop=[SpeechTimeoutUserTurnStopStrategy()],
+            ),
+        ),
     )
 
 

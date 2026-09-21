@@ -774,6 +774,69 @@ class TestWakeWordWiring:
         main_module.build_context_aggregator()
         assert captured["user_params"].vad_analyzer is not None
 
+    def test_local_vad_does_not_interrupt_the_bot(self, monkeypatch):
+        """Regression: on device the bot cut itself off mid-sentence.
+
+        A vad_analyzer makes pipecat's VADUserTurnStartStrategy live, and it
+        defaults to broadcasting an interruption on every detected turn
+        start, which GeminiLiveLLMService turns into a TTSStoppedFrame. Echo
+        leakage into the mic is therefore enough to stop the bot talking:
+        the device log showed `broadcasting interruption` 0.7s after the
+        first transcription and three more times during the reply.
+
+        Gemini decides turns server-side, so nothing here needs a local
+        barge-in.
+        """
+        monkeypatch.setattr(
+            main_module, "get_settings", lambda: _settings(wake_word_enabled=True)
+        )
+        captured = {}
+        monkeypatch.setattr(
+            main_module,
+            "LLMContextAggregatorPair",
+            lambda context, **kw: captured.update(kw) or MagicMock(),
+        )
+
+        main_module.build_context_aggregator()
+
+        starts = captured["user_params"].user_turn_strategies.start
+        assert starts, "no start strategy: the gate loses its activity signal"
+        for strategy in starts:
+            assert strategy._enable_interruptions is False, strategy
+
+    def test_no_second_onnx_model_for_turn_detection(self, monkeypatch):
+        """The default stop strategy loads smart-turn-v3.2-cpu.onnx.
+
+        `TurnAnalyzerUserTurnStopStrategy(LocalSmartTurnAnalyzerV3)` is the
+        default, and it is a whole second ONNX model doing a job Gemini
+        already does server-side -- memory and CPU a 416MB Pi cannot spare
+        on top of the wake-word chain.
+
+        Note an empty list would NOT express this: UserTurnStrategies
+        treats falsy as "unset" and restores the defaults, so this asserts a
+        real strategy is named rather than that the list is empty.
+        """
+        from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import (
+            TurnAnalyzerUserTurnStopStrategy,
+        )
+
+        monkeypatch.setattr(
+            main_module, "get_settings", lambda: _settings(wake_word_enabled=True)
+        )
+        captured = {}
+        monkeypatch.setattr(
+            main_module,
+            "LLMContextAggregatorPair",
+            lambda context, **kw: captured.update(kw) or MagicMock(),
+        )
+
+        main_module.build_context_aggregator()
+
+        stops = captured["user_params"].user_turn_strategies.stop
+        assert stops, "empty stop list would restore the ONNX default"
+        for strategy in stops:
+            assert not isinstance(strategy, TurnAnalyzerUserTurnStopStrategy), strategy
+
     def test_aggregator_has_no_vad_analyzer_when_gating_is_off(self, monkeypatch):
         """The disabled path must stay identical to the pre-feature app.
 
